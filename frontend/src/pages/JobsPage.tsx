@@ -32,48 +32,86 @@ export default function JobsPage() {
     return <span className={cls}>{status.toUpperCase()}</span>;
   };
 
+  const running = jobs.filter((j) => j.status === "running");
+  const done = jobs.filter((j) => j.status === "done");
+  const failed = jobs.filter((j) => j.status === "failed");
+
+  const renderJob = (job: ExportJob) => (
+    <div key={job.id} className="card">
+      <div className="card-header">
+        <div className="job-header-left">
+          {statusBadge(job.status)}
+          <span className="job-lines">{job.lines.toLocaleString()} qator</span>
+        </div>
+        <div className="card-actions">
+          {job.status === "done" && (
+            <a
+              href={api.downloadJob(job.id)}
+              className="btn btn-small btn-primary"
+              download
+            >
+              Yuklab olish
+            </a>
+          )}
+          <button
+            onClick={() => handleDelete(job.id)}
+            className="btn btn-small btn-danger"
+          >
+            O'chirish
+          </button>
+        </div>
+      </div>
+      <code className="query-code">{job.query}</code>
+      {job.error && <div className="error-text">{job.error}</div>}
+      <div className="job-time">
+        {new Date(job.created_at).toLocaleString()}
+      </div>
+    </div>
+  );
+
   return (
     <div className="page">
-      <h1>Active Jobs</h1>
-      <p className="subtitle">Export jarayonlari holati</p>
+      <h1>Jobs</h1>
+      <p className="subtitle">
+        Jami {jobs.length} ta job
+        {running.length > 0 && <span className="jobs-counter running">{running.length} running</span>}
+        {done.length > 0 && <span className="jobs-counter done">{done.length} done</span>}
+        {failed.length > 0 && <span className="jobs-counter failed">{failed.length} failed</span>}
+      </p>
 
-      <div className="list">
-        {jobs.length === 0 && (
-          <p className="empty">Hozircha hech qanday job yo'q</p>
-        )}
-        {jobs.map((job) => (
-          <div key={job.id} className="card">
-            <div className="card-header">
-              <div>
-                {statusBadge(job.status)}
-                <span className="job-lines">{job.lines} qator</span>
-              </div>
-              <div className="card-actions">
-                {job.status === "done" && (
-                  <a
-                    href={api.downloadJob(job.id)}
-                    className="btn btn-small btn-primary"
-                    download
-                  >
-                    Yuklab olish
-                  </a>
-                )}
-                <button
-                  onClick={() => handleDelete(job.id)}
-                  className="btn btn-small btn-danger"
-                >
-                  O'chirish
-                </button>
-              </div>
-            </div>
-            <code className="query-code">{job.query}</code>
-            {job.error && <div className="error-text">{job.error}</div>}
-            <div className="job-time">
-              {new Date(job.created_at).toLocaleString()}
-            </div>
-          </div>
-        ))}
-      </div>
+      {jobs.length === 0 && (
+        <p className="empty">Hozircha hech qanday job yo'q</p>
+      )}
+
+      {running.length > 0 && (
+        <div className="jobs-section">
+          <h3 className="jobs-section-title">
+            <span className="section-dot dot-running" />
+            Running ({running.length})
+          </h3>
+          <div className="list">{running.map(renderJob)}</div>
+        </div>
+      )}
+
+      {done.length > 0 && (
+        <div className="jobs-section">
+          <h3 className="jobs-section-title">
+            <span className="section-dot dot-done" />
+            Done ({done.length})
+          </h3>
+          <div className="list">{done.map(renderJob)}</div>
+        </div>
+      )}
+
+      {failed.length > 0 && (
+        <div className="jobs-section">
+          <h3 className="jobs-section-title">
+            <span className="section-dot dot-failed" />
+            Failed ({failed.length})
+          </h3>
+          <div className="list">{failed.map(renderJob)}</div>
+        </div>
+      )}
     </div>
   );
 }

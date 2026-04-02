@@ -1,10 +1,16 @@
 package handler
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"logdownloader/internal/model"
 	"logdownloader/internal/store"
@@ -30,6 +36,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/queries", h.createQuery)
 	mux.HandleFunc("DELETE /api/queries/{id}", h.deleteQuery)
 
+	mux.HandleFunc("GET /api/query", h.queryLogs)
 	mux.HandleFunc("POST /api/export", h.startExport)
 	mux.HandleFunc("GET /api/jobs", h.getJobs)
 	mux.HandleFunc("DELETE /api/jobs/{id}", h.deleteJob)
@@ -135,6 +142,97 @@ func (h *Handler) downloadJob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename="+job.FileName)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	http.ServeFile(w, r, filePath)
+}
+
+// Query logs
+
+func (h *Handler) queryLogs(w http.ResponseWriter, r *http.Request) {
+	settings := h.store.GetSettings()
+	if settings.VLSelectURL == "" {
+		http.Error(w, "VictoriaLogs URL not configured", http.StatusBadRequest)
+		return
+	}
+
+	query := r.URL.Query().Get("query")
+	if query == "" {
+		http.Error(w, "query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Request limit+offset rows from VictoriaLogs, then skip offset on our side
+	fetchLimit := limit + offset
+
+	baseURL := strings.TrimRight(settings.VLSelectURL, "/")
+	vlURL := fmt.Sprintf("%s/select/logsql/query", baseURL)
+
+	params := url.Values{}
+	params.Set("query", query)
+	params.Set("limit", strconv.Itoa(fetchLimit))
+
+	if start := r.URL.Query().Get("start"); start != "" {
+		params.Set("start", start)
+	}
+	if end := r.URL.Query().Get("end"); end != "" {
+		params.Set("end", end)
+	}
+
+	resp, err := http.Get(vlURL + "?" + params.Encode())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("VictoriaLogs request failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		http.Error(w, fmt.Sprintf("VictoriaLogs error: %s", string(body)), resp.StatusCode)
+		return
+	}
+
+	// Parse NDJSON response line by line
+	var allLogs []json.RawMessage
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		allLogs = append(allLogs, json.RawMessage(append([]byte{}, line...)))
+	}
+
+	total := len(allLogs)
+	hasMore := total == fetchLimit
+
+	// Apply offset
+	if offset >= len(allLogs) {
+		allLogs = nil
+	} else {
+		allLogs = allLogs[offset:]
+	}
+
+	// Apply limit
+	if len(allLogs) > limit {
+		allLogs = allLogs[:limit]
+	}
+
+	result := map[string]any{
+		"logs":     allLogs,
+		"total":    total,
+		"has_more": hasMore,
+		"limit":    limit,
+		"offset":   offset,
+	}
+	writeJSON(w, result)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

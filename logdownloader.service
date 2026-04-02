@@ -1,0 +1,17 @@
+[Unit]
+Description=LogDownloader - VictoriaLogs Export Tool
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/logdownloader
+Environment=PORT=3000
+Environment=DATA_DIR=/var/lib/logdownloader
+WorkingDirectory=/var/lib/logdownloader
+Restart=on-failure
+RestartSec=5
+User=logdownloader
+Group=logdownloader
+
+[Install]
+WantedBy=multi-user.target

@@ -6,12 +6,12 @@ export default function Layout() {
     <div className="app">
       <nav className="sidebar">
         <h2>LogDownloader</h2>
-        <NavLink to="/" end>
-          Export
-        </NavLink>
-        <NavLink to="/queries">Saved Queries</NavLink>
-        <NavLink to="/jobs">Active Jobs</NavLink>
-        <NavLink to="/settings">Settings</NavLink>
+        <div className="sidebar-nav">
+          <NavLink to="/" end>Log Viewer</NavLink>
+          <NavLink to="/export">Export</NavLink>
+          <NavLink to="/jobs">Jobs</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
+        </div>
       </nav>
       <main className="content">
         <Outlet />

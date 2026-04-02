@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"logdownloader/internal/handler"
 	"logdownloader/internal/store"
 	"logdownloader/internal/worker"
+	"logdownloader/web"
 )
 
 func main() {
@@ -18,7 +20,7 @@ func main() {
 		dataDir = d
 	}
 
-	port := "8080"
+	port := "3000"
 	if p := os.Getenv("PORT"); p != "" {
 		port = p
 	}
@@ -34,16 +36,29 @@ func main() {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	// Serve frontend static files
-	frontendDir := filepath.Join("..", "frontend", "build")
-	if _, err := os.Stat(frontendDir); err == nil {
-		mux.Handle("/", http.FileServer(http.Dir(frontendDir)))
+	// Serve embedded frontend
+	distFS, err := fs.Sub(web.StaticFiles, "dist")
+	if err != nil {
+		log.Fatalf("failed to load embedded frontend: %v", err)
 	}
+	fileServer := http.FileServer(http.FS(distFS))
+	mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
+		// Try serving the file; if not found, serve index.html (SPA fallback)
+		path := r.URL.Path
+		f, err := distFS.Open(path[1:]) // strip leading /
+		if err != nil {
+			// SPA fallback
+			r.URL.Path = "/"
+		} else {
+			f.Close()
+		}
+		fileServer.ServeHTTP(rw, r)
+	})
 
 	// CORS middleware for development
 	wrapped := corsMiddleware(mux)
 
-	fmt.Printf("Server started on http://localhost:%s\n", port)
+	fmt.Printf("LogDownloader started on http://localhost:%s\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, wrapped))
 }
 

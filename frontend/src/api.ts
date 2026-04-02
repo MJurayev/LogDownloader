@@ -20,6 +20,14 @@ export interface ExportJob {
   lines: number;
 }
 
+export interface QueryResult {
+  logs: Record<string, string>[];
+  total: number;
+  has_more: boolean;
+  limit: number;
+  offset: number;
+}
+
 export const api = {
   // Settings
   getSettings: (): Promise<Settings> =>
@@ -45,6 +53,23 @@ export const api = {
 
   deleteQuery: (id: string): Promise<void> =>
     fetch(`${API}/queries/${id}`, { method: "DELETE" }).then(() => {}),
+
+  // Query logs
+  queryLogs: (
+    query: string,
+    limit: number,
+    offset: number,
+    start?: string,
+    end?: string
+  ): Promise<QueryResult> => {
+    const params = new URLSearchParams({ query, limit: String(limit), offset: String(offset) });
+    if (start) params.set("start", start);
+    if (end) params.set("end", end);
+    return fetch(`${API}/query?${params}`).then((r) => {
+      if (!r.ok) return r.text().then((t) => Promise.reject(t));
+      return r.json();
+    });
+  },
 
   // Export & Jobs
   startExport: (query: string): Promise<{ job_id: string }> =>

@@ -29,6 +29,11 @@
   background-clip: text;
 }
 
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+}
+
 .sidebar a {
   color: #6b7280;
   text-decoration: none;

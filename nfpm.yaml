@@ -1,0 +1,20 @@
+name: logdownloader
+arch: "${GOARCH}"
+platform: linux
+version: "${VERSION}"
+maintainer: "LogDownloader"
+description: "VictoriaLogs log export tool with web UI"
+vendor: "LogDownloader"
+license: "MIT"
+
+contents:
+  - src: ./build/logdownloader-${GOOS}-${GOARCH}
+    dst: /usr/bin/logdownloader
+    file_info:
+      mode: 0755
+  - src: ./logdownloader.service
+    dst: /usr/lib/systemd/system/logdownloader.service
+
+scripts:
+  postinstall: ./scripts/postinstall.sh
+  preremove: ./scripts/preremove.sh
