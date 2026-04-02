@@ -41,6 +41,7 @@ export default function JobsPage() {
       <div className="card-header">
         <div className="job-header-left">
           {statusBadge(job.status)}
+          {job.datasource_name && <span className="job-ds-name">{job.datasource_name}</span>}
           <span className="job-lines">{job.lines.toLocaleString()} qator</span>
         </div>
         <div className="card-actions">

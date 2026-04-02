@@ -1,21 +1,31 @@
-import { useState } from "react";
-import { api } from "../api";
+import { useState, useEffect } from "react";
+import { api, type Datasource } from "../api";
 import "./Pages.css";
 
 export default function ExportPage() {
   const [query, setQuery] = useState("");
+  const [datasources, setDatasources] = useState<Datasource[]>([]);
+  const [selectedDS, setSelectedDS] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
+  useEffect(() => {
+    api.getSettings().then((s) => {
+      const ds = s.datasources || [];
+      setDatasources(ds);
+      if (ds.length > 0) setSelectedDS(ds[0].id);
+    });
+  }, []);
+
   const handleExport = async () => {
-    if (!query.trim()) return;
+    if (!query.trim() || !selectedDS) return;
     setLoading(true);
     setMessage("");
     try {
-      const res = await api.startExport(query);
+      const res = await api.startExport(query, selectedDS);
       setMessage(`Export boshlandi! Job ID: ${res.job_id}`);
       setQuery("");
-    } catch (err) {
+    } catch {
       setMessage("Xatolik yuz berdi");
     } finally {
       setLoading(false);
@@ -28,6 +38,20 @@ export default function ExportPage() {
       <p className="subtitle">LogsQL query yozing va exportni boshlang</p>
 
       <div className="export-form">
+        {datasources.length > 0 && (
+          <div className="ds-selector">
+            <label className="filter-label">Datasource</label>
+            <select
+              value={selectedDS}
+              onChange={(e) => setSelectedDS(e.target.value)}
+              className="input ds-select"
+            >
+              {datasources.map((ds) => (
+                <option key={ds.id} value={ds.id}>{ds.name || ds.url}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <textarea
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -37,7 +61,7 @@ export default function ExportPage() {
         />
         <button
           onClick={handleExport}
-          disabled={loading || !query.trim()}
+          disabled={loading || !query.trim() || !selectedDS}
           className="btn btn-primary"
         >
           {loading ? "Yuklanmoqda..." : "Export"}

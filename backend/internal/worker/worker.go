@@ -13,6 +13,7 @@ import (
 
 	"logdownloader/internal/model"
 	"logdownloader/internal/store"
+	"logdownloader/internal/vlclient"
 )
 
 type Worker struct {
@@ -23,16 +24,23 @@ func New(s *store.Store) *Worker {
 	return &Worker{store: s}
 }
 
-func (w *Worker) StartExport(query string) string {
+func (w *Worker) StartExport(query, datasourceID string) string {
 	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
 	fileName := fmt.Sprintf("export_%s.log", jobID)
 
+	dsName := datasourceID
+	if ds := w.store.GetDatasource(datasourceID); ds != nil {
+		dsName = ds.Name
+	}
+
 	job := &model.ExportJob{
-		ID:        jobID,
-		Query:     query,
-		Status:    model.JobRunning,
-		FileName:  fileName,
-		CreatedAt: time.Now(),
+		ID:             jobID,
+		Query:          query,
+		DatasourceID:   datasourceID,
+		DatasourceName: dsName,
+		Status:         model.JobRunning,
+		FileName:       fileName,
+		CreatedAt:      time.Now(),
 	}
 
 	w.store.AddJob(job)
@@ -42,19 +50,23 @@ func (w *Worker) StartExport(query string) string {
 }
 
 func (w *Worker) runExport(job *model.ExportJob) {
-	settings := w.store.GetSettings()
-	if settings.VLSelectURL == "" {
-		w.store.UpdateJobStatus(job.ID, model.JobFailed, "VictoriaLogs URL not configured", 0)
+	ds := w.store.GetDatasource(job.DatasourceID)
+	if ds == nil {
+		w.store.UpdateJobStatus(job.ID, model.JobFailed, "Datasource not found", 0)
+		return
+	}
+	if ds.URL == "" {
+		w.store.UpdateJobStatus(job.ID, model.JobFailed, "Datasource URL not configured", 0)
 		return
 	}
 
-	baseURL := strings.TrimRight(settings.VLSelectURL, "/")
+	baseURL := strings.TrimRight(ds.URL, "/")
 	exportURL := fmt.Sprintf("%s/select/logsql/query", baseURL)
 
 	params := url.Values{}
 	params.Set("query", job.Query)
 
-	resp, err := http.Get(exportURL + "?" + params.Encode())
+	resp, err := vlclient.Do("GET", exportURL+"?"+params.Encode(), *ds)
 	if err != nil {
 		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("request failed: %v", err), 0)
 		return

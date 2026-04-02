@@ -1,18 +1,30 @@
 const API = "/api";
 
+export interface Datasource {
+  id: string;
+  name: string;
+  url: string;
+  username?: string;
+  password?: string;
+  headers?: Record<string, string>;
+}
+
 export interface Settings {
-  vlselect_url: string;
+  datasources: Datasource[];
 }
 
 export interface SavedQuery {
   id: string;
   name: string;
   query: string;
+  datasource_id?: string;
 }
 
 export interface ExportJob {
   id: string;
   query: string;
+  datasource_id: string;
+  datasource_name: string;
   status: "running" | "done" | "failed";
   file_name: string;
   created_at: string;
@@ -44,11 +56,11 @@ export const api = {
   getQueries: (): Promise<SavedQuery[]> =>
     fetch(`${API}/queries`).then((r) => r.json()),
 
-  createQuery: (name: string, query: string): Promise<SavedQuery> =>
+  createQuery: (name: string, query: string, datasourceId?: string): Promise<SavedQuery> =>
     fetch(`${API}/queries`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, query }),
+      body: JSON.stringify({ name, query, datasource_id: datasourceId }),
     }).then((r) => r.json()),
 
   deleteQuery: (id: string): Promise<void> =>
@@ -57,12 +69,18 @@ export const api = {
   // Query logs
   queryLogs: (
     query: string,
+    datasourceId: string,
     limit: number,
     offset: number,
     start?: string,
     end?: string
   ): Promise<QueryResult> => {
-    const params = new URLSearchParams({ query, limit: String(limit), offset: String(offset) });
+    const params = new URLSearchParams({
+      query,
+      datasource_id: datasourceId,
+      limit: String(limit),
+      offset: String(offset),
+    });
     if (start) params.set("start", start);
     if (end) params.set("end", end);
     return fetch(`${API}/query?${params}`).then((r) => {
@@ -72,11 +90,11 @@ export const api = {
   },
 
   // Export & Jobs
-  startExport: (query: string): Promise<{ job_id: string }> =>
+  startExport: (query: string, datasourceId: string): Promise<{ job_id: string }> =>
     fetch(`${API}/export`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, datasource_id: datasourceId }),
     }).then((r) => r.json()),
 
   getJobs: (): Promise<ExportJob[]> =>

@@ -14,6 +14,7 @@ import (
 
 	"logdownloader/internal/model"
 	"logdownloader/internal/store"
+	"logdownloader/internal/vlclient"
 	"logdownloader/internal/worker"
 
 	"github.com/google/uuid"
@@ -96,18 +97,19 @@ func (h *Handler) deleteQuery(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) startExport(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Query string `json:"query"`
+		Query        string `json:"query"`
+		DatasourceID string `json:"datasource_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Query == "" {
-		http.Error(w, "query is required", http.StatusBadRequest)
+	if req.Query == "" || req.DatasourceID == "" {
+		http.Error(w, "query and datasource_id are required", http.StatusBadRequest)
 		return
 	}
 
-	jobID := h.worker.StartExport(req.Query)
+	jobID := h.worker.StartExport(req.Query, req.DatasourceID)
 	writeJSON(w, map[string]string{"job_id": jobID})
 }
 
@@ -147,9 +149,15 @@ func (h *Handler) downloadJob(w http.ResponseWriter, r *http.Request) {
 // Query logs
 
 func (h *Handler) queryLogs(w http.ResponseWriter, r *http.Request) {
-	settings := h.store.GetSettings()
-	if settings.VLSelectURL == "" {
-		http.Error(w, "VictoriaLogs URL not configured", http.StatusBadRequest)
+	dsID := r.URL.Query().Get("datasource_id")
+	if dsID == "" {
+		http.Error(w, "datasource_id is required", http.StatusBadRequest)
+		return
+	}
+
+	ds := h.store.GetDatasource(dsID)
+	if ds == nil {
+		http.Error(w, "datasource not found", http.StatusNotFound)
 		return
 	}
 
@@ -168,10 +176,9 @@ func (h *Handler) queryLogs(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	// Request limit+offset rows from VictoriaLogs, then skip offset on our side
 	fetchLimit := limit + offset
 
-	baseURL := strings.TrimRight(settings.VLSelectURL, "/")
+	baseURL := strings.TrimRight(ds.URL, "/")
 	vlURL := fmt.Sprintf("%s/select/logsql/query", baseURL)
 
 	params := url.Values{}
@@ -185,7 +192,7 @@ func (h *Handler) queryLogs(w http.ResponseWriter, r *http.Request) {
 		params.Set("end", end)
 	}
 
-	resp, err := http.Get(vlURL + "?" + params.Encode())
+	resp, err := vlclient.Do("GET", vlURL+"?"+params.Encode(), *ds)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("VictoriaLogs request failed: %v", err), http.StatusBadGateway)
 		return
@@ -198,7 +205,6 @@ func (h *Handler) queryLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse NDJSON response line by line
 	var allLogs []json.RawMessage
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -213,14 +219,11 @@ func (h *Handler) queryLogs(w http.ResponseWriter, r *http.Request) {
 	total := len(allLogs)
 	hasMore := total == fetchLimit
 
-	// Apply offset
 	if offset >= len(allLogs) {
 		allLogs = nil
 	} else {
 		allLogs = allLogs[offset:]
 	}
-
-	// Apply limit
 	if len(allLogs) > limit {
 		allLogs = allLogs[:limit]
 	}

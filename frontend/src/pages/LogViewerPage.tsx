@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, type SavedQuery } from "../api";
+import { api, type SavedQuery, type Datasource } from "../api";
 import "./Pages.css";
 
 const PAGE_SIZE = 50;
@@ -9,6 +9,8 @@ const PAGE_SIZE = 50;
 export default function LogViewerPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("*");
+  const [datasources, setDatasources] = useState<Datasource[]>([]);
+  const [selectedDS, setSelectedDS] = useState("");
 
   const [logs, setLogs] = useState<Record<string, string>[]>([]);
   const [loading, setLoading] = useState(false);
@@ -33,11 +35,17 @@ export default function LogViewerPage() {
 
   useEffect(() => {
     loadSavedQueries();
+    api.getSettings().then((s) => {
+      const ds = s.datasources || [];
+      setDatasources(ds);
+      if (ds.length > 0) setSelectedDS(ds[0].id);
+    });
   }, []);
 
   const handleSelectQuery = (sq: SavedQuery) => {
     setQuery(sq.query);
     setActiveQueryId(sq.id);
+    if (sq.datasource_id) setSelectedDS(sq.datasource_id);
   };
 
   const handleDeleteQuery = async (id: string) => {
@@ -49,7 +57,7 @@ export default function LogViewerPage() {
   const handleSaveQuery = async () => {
     if (!saveName.trim() || !query.trim()) return;
     try {
-      await api.createQuery(saveName, query);
+      await api.createQuery(saveName, query, selectedDS);
       loadSavedQueries();
       setSaveMsg("Saqlandi!");
       setTimeout(() => { setShowSaveModal(false); setSaveMsg(""); setSaveName(""); }, 1000);
@@ -62,7 +70,7 @@ export default function LogViewerPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await api.queryLogs(query, PAGE_SIZE, pageNum * PAGE_SIZE);
+      const res = await api.queryLogs(query, selectedDS, PAGE_SIZE, pageNum * PAGE_SIZE);
       setLogs(res.logs || []);
       setHasMore(res.has_more);
       setTotal(res.total);
@@ -136,6 +144,22 @@ export default function LogViewerPage() {
         <p className="subtitle">LogsQL query yozing va loglarni ko'ring</p>
 
         <div className="viewer-controls">
+          <div className="ds-selector">
+            <label className="filter-label">Datasource</label>
+            {datasources.length > 0 ? (
+              <select
+                value={selectedDS}
+                onChange={(e) => setSelectedDS(e.target.value)}
+                className="input ds-select"
+              >
+                {datasources.map((ds) => (
+                  <option key={ds.id} value={ds.id}>{ds.name || ds.url}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="ds-empty-hint">Settings dan datasource qo'shing</span>
+            )}
+          </div>
           <div className="viewer-query-row">
             <textarea
               value={query}
@@ -163,11 +187,11 @@ export default function LogViewerPage() {
             </button>
             <button
               onClick={async () => {
-                if (!query.trim()) return;
-                await api.startExport(query);
+                if (!query.trim() || !selectedDS) return;
+                await api.startExport(query, selectedDS);
                 navigate("/jobs");
               }}
-              disabled={!query.trim()}
+              disabled={!query.trim() || !selectedDS}
               className="btn btn-small btn-export-action"
             >
               Export

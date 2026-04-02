@@ -55,6 +55,17 @@ func (s *Store) SaveSettings(settings model.Settings) error {
 	return s.saveFile("settings.json", settings)
 }
 
+func (s *Store) GetDatasource(id string) *model.Datasource {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range s.settings.Datasources {
+		if s.settings.Datasources[i].ID == id {
+			return &s.settings.Datasources[i]
+		}
+	}
+	return nil
+}
+
 func (s *Store) loadSettings() {
 	data, err := os.ReadFile(filepath.Join(s.dataDir, "settings.json"))
 	if err != nil {
