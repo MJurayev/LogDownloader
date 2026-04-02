@@ -45,23 +45,16 @@ jobs:
           cd backend
           go build -ldflags="-s -w" -o ../build/logdownloader-linux-${{ matrix.goarch }} ./cmd
 
-      - name: Build RPM
+      - name: Build RPM and DEB
         env:
           VERSION: ${{ github.ref_name }}
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
         run: |
-          VERSION=${VERSION#v}
-          nfpm package --packager rpm --target build/
-
-      - name: Build DEB
-        env:
-          VERSION: ${{ github.ref_name }}
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          VERSION=${VERSION#v}
-          nfpm package --packager deb --target build/
+          export VERSION=${VERSION#v}
+          envsubst < nfpm.yaml > nfpm-resolved.yaml
+          nfpm package --config nfpm-resolved.yaml --packager rpm --target build/
+          nfpm package --config nfpm-resolved.yaml --packager deb --target build/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
