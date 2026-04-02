@@ -52,15 +52,45 @@ export default function SettingsPage() {
     ));
   };
 
-  const getHeaders = (ds: Datasource) =>
-    Object.entries(ds.headers || {}).map(([key, value]) => ({ key, value }));
+  const [dsHeaders, setDsHeaders] = useState<Record<string, { key: string; value: string }[]>>({});
 
-  const setHeadersForDS = (id: string, headers: { key: string; value: string }[]) => {
+  useEffect(() => {
+    const map: Record<string, { key: string; value: string }[]> = {};
+    datasources.forEach((ds) => {
+      if (!dsHeaders[ds.id]) {
+        map[ds.id] = Object.entries(ds.headers || {}).map(([key, value]) => ({ key, value }));
+      } else {
+        map[ds.id] = dsHeaders[ds.id];
+      }
+    });
+    if (Object.keys(map).length > 0 && Object.keys(dsHeaders).length === 0) {
+      setDsHeaders(map);
+    }
+  }, [datasources]);
+
+  const getHeaders = (ds: Datasource) => dsHeaders[ds.id] || [];
+
+  const updateHeaderRow = (dsId: string, idx: number, field: "key" | "value", val: string) => {
+    const arr = [...(dsHeaders[dsId] || [])];
+    arr[idx] = { ...arr[idx], [field]: val };
+    setDsHeaders({ ...dsHeaders, [dsId]: arr });
+    // Sync to datasources
     const map: Record<string, string> = {};
-    headers.forEach((h) => { if (h.key.trim()) map[h.key.trim()] = h.value; });
-    setDatasources(datasources.map((d) =>
-      d.id === id ? { ...d, headers: map } : d
-    ));
+    arr.forEach((h) => { if (h.key.trim()) map[h.key.trim()] = h.value; });
+    setDatasources(datasources.map((d) => d.id === dsId ? { ...d, headers: map } : d));
+  };
+
+  const addHeaderRow = (dsId: string) => {
+    const arr = [...(dsHeaders[dsId] || []), { key: "", value: "" }];
+    setDsHeaders({ ...dsHeaders, [dsId]: arr });
+  };
+
+  const removeHeaderRow = (dsId: string, idx: number) => {
+    const arr = (dsHeaders[dsId] || []).filter((_, i) => i !== idx);
+    setDsHeaders({ ...dsHeaders, [dsId]: arr });
+    const map: Record<string, string> = {};
+    arr.forEach((h) => { if (h.key.trim()) map[h.key.trim()] = h.value; });
+    setDatasources(datasources.map((d) => d.id === dsId ? { ...d, headers: map } : d));
   };
 
   if (loading) return <div className="page">Yuklanmoqda...</div>;
@@ -134,29 +164,18 @@ export default function SettingsPage() {
                     <div key={i} className="settings-header-row">
                       <input
                         value={h.key}
-                        onChange={(e) => {
-                          const arr = getHeaders(ds);
-                          arr[i].key = e.target.value;
-                          setHeadersForDS(ds.id, arr);
-                        }}
+                        onChange={(e) => updateHeaderRow(ds.id, i, "key", e.target.value)}
                         placeholder="Header nomi"
                         className="input"
                       />
                       <input
                         value={h.value}
-                        onChange={(e) => {
-                          const arr = getHeaders(ds);
-                          arr[i].value = e.target.value;
-                          setHeadersForDS(ds.id, arr);
-                        }}
+                        onChange={(e) => updateHeaderRow(ds.id, i, "value", e.target.value)}
                         placeholder="Qiymati"
                         className="input"
                       />
                       <button
-                        onClick={() => {
-                          const arr = getHeaders(ds).filter((_, idx) => idx !== i);
-                          setHeadersForDS(ds.id, arr);
-                        }}
+                        onClick={() => removeHeaderRow(ds.id, i)}
                         className="btn btn-small btn-danger"
                       >
                         &times;
@@ -164,7 +183,7 @@ export default function SettingsPage() {
                     </div>
                   ))}
                   <button
-                    onClick={() => setHeadersForDS(ds.id, [...getHeaders(ds), { key: "", value: "" }])}
+                    onClick={() => addHeaderRow(ds.id)}
                     className="btn btn-small btn-outline"
                   >
                     + Header
