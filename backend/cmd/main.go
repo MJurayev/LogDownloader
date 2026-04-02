@@ -5,9 +5,8 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 
+	"logdownloader/internal/config"
 	"logdownloader/internal/handler"
 	"logdownloader/internal/store"
 	"logdownloader/internal/worker"
@@ -15,17 +14,9 @@ import (
 )
 
 func main() {
-	dataDir := filepath.Join(".", "data")
-	if d := os.Getenv("DATA_DIR"); d != "" {
-		dataDir = d
-	}
+	cfg := config.Load()
 
-	port := "3000"
-	if p := os.Getenv("PORT"); p != "" {
-		port = p
-	}
-
-	s, err := store.New(dataDir)
+	s, err := store.New(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("failed to init store: %v", err)
 	}
@@ -58,8 +49,8 @@ func main() {
 	// CORS middleware for development
 	wrapped := corsMiddleware(mux)
 
-	fmt.Printf("LogDownloader started on http://localhost:%s\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, wrapped))
+	fmt.Printf("LogDownloader started on http://localhost:%s\n", cfg.Port)
+	log.Fatal(http.ListenAndServe(":"+cfg.Port, wrapped))
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

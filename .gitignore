@@ -1,6 +1,7 @@
 node_modules/
-dist/
 frontend/dist/
+backend/web/dist/*
+!backend/web/dist/.gitkeep
 backend/data/
 *.log
 .DS_Store

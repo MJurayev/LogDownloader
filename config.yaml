@@ -1,0 +1,3 @@
+# LogDownloader configuration
+port: "3000"
+data_dir: "./data"

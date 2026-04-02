@@ -1,0 +1,54 @@
+package config
+
+import (
+	"flag"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Config struct {
+	Port    string `yaml:"port"`
+	DataDir string `yaml:"data_dir"`
+}
+
+func Load() Config {
+	configPath := flag.String("config", "", "path to config file")
+	flag.Parse()
+
+	cfg := Config{
+		Port:    "3000",
+		DataDir: "./data",
+	}
+
+	// 1. Config file
+	path := *configPath
+	if path == "" {
+		path = os.Getenv("CONFIG_PATH")
+	}
+	if path == "" {
+		// default locations
+		for _, p := range []string{"config.yaml", "/etc/logdownloader/config.yaml"} {
+			if _, err := os.Stat(p); err == nil {
+				path = p
+				break
+			}
+		}
+	}
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			yaml.Unmarshal(data, &cfg)
+		}
+	}
+
+	// 2. Env vars override
+	if v := os.Getenv("PORT"); v != "" {
+		cfg.Port = v
+	}
+	if v := os.Getenv("DATA_DIR"); v != "" {
+		cfg.DataDir = v
+	}
+
+	return cfg
+}
