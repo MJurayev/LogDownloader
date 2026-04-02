@@ -1,0 +1,35 @@
+services:
+  victorialogs:
+    image: victoriametrics/victoria-logs:latest
+    ports:
+      - "9428:9428"
+    volumes:
+      - vl-data:/vlogs
+
+  log-generator:
+    image: python:3.12-alpine
+    depends_on:
+      - victorialogs
+    volumes:
+      - ./log-generator.py:/app/gen.py:ro
+    command: python /app/gen.py
+
+  backend:
+    build: ./backend
+    volumes:
+      - app-data:/app/data
+    expose:
+      - "8080"
+    depends_on:
+      - victorialogs
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  app-data:
+  vl-data:
