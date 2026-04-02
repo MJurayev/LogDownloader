@@ -2,8 +2,12 @@ import { useState, useEffect } from "react";
 import { api, type Datasource } from "../api";
 import "./Pages.css";
 
+function genId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
 function newDatasource(): Datasource {
-  return { id: crypto.randomUUID(), name: "", url: "", username: "", password: "", headers: {} };
+  return { id: genId(), name: "", url: "", username: "", password: "", headers: {} };
 }
 
 export default function SettingsPage() {
