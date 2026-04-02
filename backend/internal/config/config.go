@@ -18,7 +18,7 @@ func Load() Config {
 
 	cfg := Config{
 		Port:    "3000",
-		DataDir: "./data",
+		DataDir: "/var/lib/logdownloader",
 	}
 
 	// 1. Config file
