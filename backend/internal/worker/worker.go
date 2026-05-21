@@ -25,8 +25,9 @@ func New(s *store.Store) *Worker {
 }
 
 func (w *Worker) StartExport(query, datasourceID, start, end, sortOrder, name string) string {
-	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
-	fileName := sanitizeFileName(name, jobID)
+	createdAt := time.Now()
+	jobID := fmt.Sprintf("job_%d", createdAt.UnixNano())
+	fileName := sanitizeFileName(name, createdAt)
 
 	dsName := datasourceID
 	if ds := w.store.GetDatasource(datasourceID); ds != nil {
@@ -40,7 +41,7 @@ func (w *Worker) StartExport(query, datasourceID, start, end, sortOrder, name st
 		DatasourceName: dsName,
 		Status:         model.JobRunning,
 		FileName:       fileName,
-		CreatedAt:      time.Now(),
+		CreatedAt:      createdAt,
 		Start:          start,
 		End:            end,
 		SortOrder:      sortOrder,
@@ -52,17 +53,25 @@ func (w *Worker) StartExport(query, datasourceID, start, end, sortOrder, name st
 	return jobID
 }
 
-// sanitizeFileName foydalanuvchidan kelgan nomni tozalaydi va xavfsiz qiladi:
-// path separator olib tashlanadi, control chars yo'q qilinadi, bo'sh bo'lsa
-// default nom qaytariladi, kerak bo'lsa `.log` qo'shiladi.
-func sanitizeFileName(name, jobID string) string {
+// sanitizeFileName fayl nomini xavfsiz qiladi va doim oxiriga UTC timestamp
+// (`YYYYMMDD-HHMMSS-mmm`) qo'shadi — diskdagi fayl nomlari unique bo'lishi va
+// foydalanuvchi qachon export qilganini ko'rishi uchun.
+//
+// Misol: "my-prod-logs"  -> "my-prod-logs_20260521-090655-123.log"
+//        ""              -> "export_20260521-090655-123.log"
+//        "../../etc/passwd" -> "passwd_20260521-090655-123.log"
+func sanitizeFileName(name string, createdAt time.Time) string {
+	ts := createdAt.UTC().Format("20060102-150405")
+	ms := createdAt.Nanosecond() / 1e6
+	timestamp := fmt.Sprintf("%s-%03d", ts, ms)
+
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Sprintf("export_%s.log", jobID)
+		return fmt.Sprintf("export_%s.log", timestamp)
 	}
-	// Backslash'larni ham slash bilan birga olib tashlash uchun
+	// Path traversal himoyasi
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
-	// Control chars va separatorlarni olib tashlash
+	// Control chars va separatorlar
 	name = strings.Map(func(r rune) rune {
 		if r < 32 || r == '/' || r == '\\' || r == 127 {
 			return -1
@@ -70,12 +79,16 @@ func sanitizeFileName(name, jobID string) string {
 		return r
 	}, name)
 	if name == "" || name == "." || name == ".." {
-		return fmt.Sprintf("export_%s.log", jobID)
+		return fmt.Sprintf("export_%s.log", timestamp)
 	}
-	if !strings.HasSuffix(strings.ToLower(name), ".log") {
-		name = name + ".log"
+	// Foydalanuvchi `.log` yozgan bo'lsa kesib tashlaymiz — aks holda
+	// `my-logs.log_20260521-090655-123.log` chiqib qoladi.
+	base := strings.TrimSuffix(name, ".log")
+	base = strings.TrimSuffix(base, ".LOG")
+	if base == "" {
+		return fmt.Sprintf("export_%s.log", timestamp)
 	}
-	return name
+	return fmt.Sprintf("%s_%s.log", base, timestamp)
 }
 
 func (w *Worker) runExport(job *model.ExportJob) {

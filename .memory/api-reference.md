@@ -109,7 +109,7 @@ Server VictoriaLogs `/select/logsql/query`'dan `limit+offset` qator oladi, NDJSO
 // 200
 { "job_id": "job_1714000000000000000" }
 ```
-`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. Pipe qo'shish mantiqi `/api/query`'dagi `sort` bilan bir xil (`vlclient.WithTimeSort`). `name` — fayl nomi (ixtiyoriy): bo'sh bo'lsa `export_<job_id>.log` default. Server `sanitizeFileName` orqali tozalaydi (path separator olib tashlanadi, `.log` suffix avtomatik). Server `worker.StartExport`'ni chaqiradi; goroutine boshlanadi, in-memory map'ga yoziladi (jobs file'ga saqlanmaydi — server restart bo'lsa joblar yo'qoladi, lekin export fayllari diskda qoladi).
+`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. Pipe qo'shish mantiqi `/api/query`'dagi `sort` bilan bir xil (`vlclient.WithTimeSort`). `name` — fayl nomi (ixtiyoriy): bo'sh bo'lsa `export` prefix ishlatiladi. Server `sanitizeFileName` orqali tozalaydi (path separator olib tashlanadi, foydalanuvchi `.log` yozgan bo'lsa kesiladi) va doim oxiriga UTC timestamp `_YYYYMMDD-HHMMSS-mmm.log` qo'shadi — diskdagi fayllar unique bo'lishi va qachon export qilingani ko'rinishi uchun. Misol: `my-prod-logs` → `my-prod-logs_20260521-090655-123.log`. Server `worker.StartExport`'ni chaqiradi; goroutine boshlanadi, in-memory map'ga yoziladi (jobs file'ga saqlanmaydi — server restart bo'lsa joblar yo'qoladi, lekin export fayllari diskda qoladi).
 
 ### GET `/api/jobs`
 Barcha joblar (filterlamayd, har user hammasini ko'radi). **`CreatedAt` DESC bo'yicha tartiblangan** — eng yangi joblar tepada.
