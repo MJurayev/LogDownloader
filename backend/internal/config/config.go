@@ -8,6 +8,7 @@ import (
 )
 
 type Config struct {
+	Host      string `yaml:"host"`
 	Port      string `yaml:"port"`
 	DataDir   string `yaml:"data_dir"`
 	JWTSecret string `yaml:"jwt_secret"`
@@ -18,6 +19,7 @@ func Load() Config {
 	flag.Parse()
 
 	cfg := Config{
+		Host:    "",
 		Port:    "3000",
 		DataDir: "/var/lib/logdownloader",
 	}
@@ -44,6 +46,9 @@ func Load() Config {
 	}
 
 	// 2. Env vars override
+	if v := os.Getenv("HOST"); v != "" {
+		cfg.Host = v
+	}
 	if v := os.Getenv("PORT"); v != "" {
 		cfg.Port = v
 	}

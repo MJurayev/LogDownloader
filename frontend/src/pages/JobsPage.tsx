@@ -22,14 +22,6 @@ export default function JobsPage() {
     loadJobs();
   };
 
-  const handleDownload = async (id: string) => {
-    try {
-      await api.downloadJob(id);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Yuklab olishda xatolik");
-    }
-  };
-
   const statusBadge = (status: string) => {
     const cls =
       status === "running"
@@ -55,7 +47,7 @@ export default function JobsPage() {
         <div className="card-actions">
           {job.status === "done" && (
             <button
-              onClick={() => handleDownload(job.id)}
+              onClick={() => api.downloadJob(job.id)}
               className="btn btn-small btn-primary"
             >
               Yuklab olish

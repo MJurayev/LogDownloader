@@ -177,29 +177,23 @@ export const api = {
   deleteJob: (id: string): Promise<void> =>
     authFetch(`${API}/jobs/${id}`, { method: "DELETE" }).then(() => {}),
 
-  // Browser <a download> Authorization header'ni yubora olmaydi. Shu sababli
-  // faylni JWT bilan fetch qilamiz, blob URL yaratamiz va dasturiy click bilan
-  // yuklab olamiz.
-  downloadJob: async (id: string): Promise<void> => {
-    const res = await authFetch(`${API}/jobs/${id}/download`);
-    if (!res.ok) throw new Error(`Yuklab olishda xatolik: ${res.status}`);
-
-    const disposition = res.headers.get("Content-Disposition") || "";
-    const match = disposition.match(/filename=([^;]+)/);
-    const filename = match ? match[1].trim().replace(/^"|"$/g, "") : `export_${id}.log`;
-
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    try {
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } finally {
-      URL.revokeObjectURL(url);
+  // Brauzer'ning native streaming download'i — fayl xotiraga to'liq yuklanmasdan
+  // to'g'ridan-to'g'ri diskka oqim qiladi. Bu katta exportlarni qo'llab-quvvatlaydi
+  // (oldingi blob yondashuvi ~1GB+ da OOM bo'lardi). JWT URL'ga query param sifatida
+  // qo'shiladi — backend auth middleware'da /download endpoint'i uchun maxsus qabul.
+  downloadJob: (id: string): void => {
+    const token = getToken();
+    if (!token) {
+      window.location.href = "/login";
+      return;
     }
+    const url = `${API}/jobs/${id}/download?token=${encodeURIComponent(token)}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `export_${id}.log`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   },
 
   // Users (admin)

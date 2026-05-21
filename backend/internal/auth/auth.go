@@ -105,6 +105,13 @@ func Middleware(next http.Handler) http.Handler {
 			tokenStr = strings.TrimPrefix(auth, "Bearer ")
 		}
 
+		// Brauzer <a download> Authorization header yubora olmaydi. Native
+		// streaming download uchun /api/.../download endpoint'iga ?token=
+		// query param orqali ham auth qabul qilamiz (faqat shu suffix uchun).
+		if tokenStr == "" && strings.HasSuffix(r.URL.Path, "/download") {
+			tokenStr = r.URL.Query().Get("token")
+		}
+
 		if tokenStr == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

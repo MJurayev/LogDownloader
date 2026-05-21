@@ -52,7 +52,14 @@ Quyi ahamiyatda; default sidebar nav.
 
 ## Download flow
 
-`/api/jobs/{id}/download` JWT auth talab qiladi, lekin `<a href download>` Authorization header'ni yubora olmaydi. Shu sababli `api.downloadJob(id)` endi async funksiya: `authFetch` orqali blob oladi, `Content-Disposition`'dan filename'ni ajratib oladi va dasturiy click bilan yuklab oladi. Katta exportlar (> 1-2 GB) bu yondashuvda butunlay xotirada bufferlanadi — kelajakda muammoga aylansa, server tomondan signed short-lived URL pattern'iga o'tish kerak.
+`/api/jobs/{id}/download` JWT auth talab qiladi, lekin `<a href download>` Authorization header'ni yubora olmaydi. Shu sababli ikki tomonlama yechim:
+
+1. **Backend** `auth.Middleware`'da: agar `Authorization` header bo'sh va URL `/download` bilan tugasa, `?token=` query param'dan JWT olinadi (boshqa endpointlarda emas — minimal surface area).
+2. **Frontend** `api.downloadJob(id)` sinxron: `<a href="/api/jobs/{id}/download?token=<jwt>" download>` yaratadi va dasturiy click qiladi. Brauzer faylni **xotirada bufferlamasdan to'g'ridan-to'g'ri diskka oqim qiladi** (native streaming download).
+
+Bu yondashuv katta exportlar (multi-GB) uchun ishlaydi. Eski blob-based yondashuv ~1GB+ da OOM bo'lardi.
+
+**Xavfsizlik trade-off:** JWT URL'da paydo bo'ladi, ya'ni reverse-proxy access loglariga tushishi mumkin. Self-hosted ichki log vositasi uchun qabul qilingan. Yuqori xavfsizlik kerak bo'lsa — `/api/jobs/{id}/download-token` endpoint qo'shib qisqa muddatli (5 daqiqa), bitta job'ga scoped tokenni alohida chiqarish mumkin (hozir implement qilinmagan).
 
 ## Ma'lum quirks
 

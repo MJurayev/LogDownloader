@@ -73,8 +73,13 @@ func main() {
 	// Auth middleware wraps CORS
 	wrapped := corsMiddleware(auth.Middleware(mux))
 
-	fmt.Printf("LogDownloader started on http://localhost:%s\n", cfg.Port)
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, wrapped))
+	listenAddr := cfg.Host + ":" + cfg.Port
+	if cfg.Host == "" {
+		fmt.Printf("LogDownloader listening on %s (all interfaces)\n", listenAddr)
+	} else {
+		fmt.Printf("LogDownloader listening on http://%s:%s\n", cfg.Host, cfg.Port)
+	}
+	log.Fatal(http.ListenAndServe(listenAddr, wrapped))
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

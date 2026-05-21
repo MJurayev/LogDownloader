@@ -5,3 +5,4 @@ backend/web/dist/*
 backend/data/
 *.log
 .DS_Store
+docker-compose.override.yml

@@ -1,3 +1,4 @@
 # LogDownloader configuration
+host: ""                          # bo'sh = barcha interface'lar (0.0.0.0). Misol: "127.0.0.1" — faqat localhost
 port: "3000"
 data_dir: "/var/lib/logdownloader"

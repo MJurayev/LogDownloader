@@ -133,7 +133,9 @@ Barcha joblar (filterlamayd, har user hammasini ko'radi).
 In-memory entry + diskdagi fayl o'chadi. Ownership yo'q.
 
 ### GET `/api/jobs/{id}/download`
-`Content-Disposition: attachment` bilan `.log` fayl. Status `done` emas — 400.
+`Content-Disposition: attachment` bilan `.log` fayl (`http.ServeFile` orqali streaming). Status `done` emas — 400.
+
+**Auth:** `Authorization: Bearer <jwt>` header standart yo'l. Brauzer `<a href download>` Authorization yubora olmagani sababli, **bu endpoint** uchun `?token=<jwt>` query param ham qabul qilinadi (auth middleware'da `strings.HasSuffix(path, "/download")` tekshiruvi). Boshqa endpointlarda query token ishlamaydi.
 
 ## Users (admin only)
 
