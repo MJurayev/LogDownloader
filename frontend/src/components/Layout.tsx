@@ -1,12 +1,29 @@
+import { useState, useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import "./Layout.css";
+
+type Theme = "dark" | "light";
 
 interface Props {
   user: { username: string; role: string } | null;
   onLogout: () => void;
 }
 
+function getInitialTheme(): Theme {
+  const attr = document.documentElement.getAttribute("data-theme");
+  return attr === "light" ? "light" : "dark";
+}
+
 export default function Layout({ user, onLogout }: Props) {
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+
   return (
     <div className="app">
       <nav className="sidebar">
@@ -23,6 +40,14 @@ export default function Layout({ user, onLogout }: Props) {
             <span className="sidebar-username">{user?.username}</span>
             <span className={`sidebar-role ${user?.role === "admin" ? "role-admin" : ""}`}>{user?.role}</span>
           </div>
+          <button
+            className="sidebar-theme-toggle"
+            onClick={toggleTheme}
+            title={theme === "dark" ? "Light mode" : "Dark mode"}
+          >
+            <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
+            <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+          </button>
           <button className="sidebar-logout" onClick={onLogout}>Chiqish</button>
         </div>
       </nav>
