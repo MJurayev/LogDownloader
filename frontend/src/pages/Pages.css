@@ -952,6 +952,30 @@
   padding: 6px 10px;
 }
 
+.export-format-select {
+  width: auto;
+  font-size: 12px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+}
+
+.job-size {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.job-format-chip {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
 .job-filename {
   display: inline-block;
   color: var(--code);

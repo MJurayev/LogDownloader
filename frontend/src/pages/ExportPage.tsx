@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { api, type Datasource } from "../api";
+import { api, type Datasource, type ExportFormat } from "../api";
 import "./Pages.css";
 
 const browserTZ = (() => {
@@ -23,6 +23,7 @@ export default function ExportPage() {
   const [timeStart, setTimeStart] = useState<Date | null>(null);
   const [timeEnd, setTimeEnd] = useState<Date | null>(null);
   const [fileName, setFileName] = useState("");
+  const [format, setFormat] = useState<ExportFormat>("log.gz");
 
   useEffect(() => {
     api.getDatasources().then((ds) => {
@@ -49,7 +50,7 @@ export default function ExportPage() {
     setLoading(true);
     setMessage("");
     try {
-      const res = await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), "asc", fileName);
+      const res = await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), "asc", fileName, format);
       setMessage(`Export boshlandi! Job ID: ${res.job_id}`);
       setQuery("");
       setFileName("");
@@ -152,9 +153,21 @@ export default function ExportPage() {
           <input
             value={fileName}
             onChange={(e) => setFileName(e.target.value)}
-            placeholder="Default: export_<job_id>.log"
+            placeholder="Default: export_<vaqt>"
             className="input"
           />
+        </div>
+        <div className="form-group">
+          <label className="label">Format</label>
+          <select
+            value={format}
+            onChange={(e) => setFormat(e.target.value as ExportFormat)}
+            className="input ds-select"
+          >
+            <option value="log.gz">.log.gz (gzipped, kichik fayl)</option>
+            <option value="log">.log (xom NDJSON)</option>
+            <option value="tar.gz">.tar.gz (tar+gzip arxiv)</option>
+          </select>
         </div>
         <button
           onClick={handleExport}

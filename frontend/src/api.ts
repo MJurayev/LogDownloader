@@ -41,6 +41,8 @@ export interface SavedQuery {
   owner_id: string;
 }
 
+export type ExportFormat = "log" | "log.gz" | "tar.gz";
+
 export interface ExportJob {
   id: string;
   query: string;
@@ -53,6 +55,8 @@ export interface ExportJob {
   lines: number;
   start?: string;
   end?: string;
+  format?: ExportFormat;
+  size: number;
 }
 
 export interface QueryResult {
@@ -171,6 +175,7 @@ export const api = {
     end?: string,
     sortOrder?: "asc" | "desc",
     name?: string,
+    format?: ExportFormat,
   ): Promise<{ job_id: string }> =>
     authFetch(`${API}/export`, {
       method: "POST",
@@ -181,6 +186,7 @@ export const api = {
         end: end || "",
         sort_order: sortOrder || "",
         name: name || "",
+        format: format || "log",
       }),
     }).then((r) => r.json()),
 

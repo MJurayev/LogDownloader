@@ -112,6 +112,18 @@ export default function JobsPage() {
     }
   };
 
+  const formatBytes = (n: number): string => {
+    if (!n) return "—";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+  };
+
   const statusBadge = (status: string) => {
     const cls =
       status === "running"
@@ -133,6 +145,10 @@ export default function JobsPage() {
           {statusBadge(job.status)}
           {job.datasource_name && <span className="job-ds-name">{job.datasource_name}</span>}
           <span className="job-lines">{job.lines.toLocaleString()} qator</span>
+          {job.size > 0 && <span className="job-size">{formatBytes(job.size)}</span>}
+          {job.format && job.format !== "log" && (
+            <span className="job-format-chip">{job.format}</span>
+          )}
         </div>
         <div className="card-actions">
           {job.status === "done" && (

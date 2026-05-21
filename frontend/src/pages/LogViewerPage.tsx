@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { api, type SavedQuery, type Datasource } from "../api";
+import { api, type SavedQuery, type Datasource, type ExportFormat } from "../api";
 import "./Pages.css";
 
 const PAGE_SIZE = 50;
@@ -61,6 +61,7 @@ export default function LogViewerPage() {
 
   // Export fayl nomi. Bo'sh bo'lsa default `export_<job_id>.log`.
   const [exportFileName, setExportFileName] = useState("");
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("log.gz");
 
   // Edit saved query modal
   const [editingQuery, setEditingQuery] = useState<SavedQuery | null>(null);
@@ -389,13 +390,23 @@ export default function LogViewerPage() {
             <input
               value={exportFileName}
               onChange={(e) => setExportFileName(e.target.value)}
-              placeholder="Fayl nomi (ixtiyoriy, default: export_<id>.log)"
+              placeholder="Fayl nomi (ixtiyoriy)"
               className="input export-filename-input"
             />
+            <select
+              value={exportFormat}
+              onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
+              className="input export-format-select"
+              title="Export formati"
+            >
+              <option value="log.gz">.log.gz</option>
+              <option value="log">.log (xom)</option>
+              <option value="tar.gz">.tar.gz</option>
+            </select>
             <button
               onClick={async () => {
                 if (!query.trim() || !selectedDS) return;
-                await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), sortOrder, exportFileName);
+                await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), sortOrder, exportFileName, exportFormat);
                 setExportFileName("");
                 navigate("/jobs");
               }}

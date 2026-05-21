@@ -61,6 +61,11 @@ type ExportJob struct {
 	Start          string    `json:"start,omitempty"`
 	End            string    `json:"end,omitempty"`
 	SortOrder      string    `json:"sort_order,omitempty"`
+	// Format: "log" (xom NDJSON) | "log.gz" (gzipped) | "tar.gz" (tar+gzip).
+	// Bo'sh bo'lsa "log" deb interpretatsiya qilinadi (eski joblar uchun).
+	Format string `json:"format,omitempty"`
+	// Size — diskdagi yakuniy fayl hajmi (baytlar).
+	Size int64 `json:"size"`
 }
 
 // ShareLink — export faylga ommaviy URL beradi (auth talab qilmaydi).

@@ -236,6 +236,14 @@ func (s *Store) UpdateJobStatus(id string, status model.JobStatus, errMsg string
 	}
 }
 
+func (s *Store) UpdateJobSize(id string, size int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if job, ok := s.jobs[id]; ok {
+		job.Size = size
+	}
+}
+
 func (s *Store) DeleteJob(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

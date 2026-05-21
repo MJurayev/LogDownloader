@@ -418,6 +418,7 @@ func (h *Handler) startExport(w http.ResponseWriter, r *http.Request) {
 		End          string `json:"end"`
 		SortOrder    string `json:"sort_order"`
 		Name         string `json:"name"`
+		Format       string `json:"format"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -428,8 +429,21 @@ func (h *Handler) startExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID := h.worker.StartExport(req.Query, req.DatasourceID, req.Start, req.End, req.SortOrder, req.Name)
+	jobID := h.worker.StartExport(req.Query, req.DatasourceID, req.Start, req.End, req.SortOrder, req.Name, req.Format)
 	writeJSON(w, map[string]string{"job_id": jobID})
+}
+
+// contentTypeForFile fayl kengaytmasiga qarab Content-Type qaytaradi.
+func contentTypeForFile(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
+		return "application/gzip"
+	case strings.HasSuffix(lower, ".gz"):
+		return "application/gzip"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 func (h *Handler) getJobs(w http.ResponseWriter, r *http.Request) {
@@ -555,7 +569,7 @@ func (h *Handler) downloadShare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", contentTypeForFile(fileName))
 	http.ServeFile(w, r, filePath)
 
 	if exhaustedAfter {
@@ -612,7 +626,7 @@ func (h *Handler) downloadJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Disposition", "attachment; filename="+job.FileName)
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", contentTypeForFile(job.FileName))
 	http.ServeFile(w, r, filePath)
 }
 

@@ -103,13 +103,21 @@ Server VictoriaLogs `/select/logsql/query`'dan `limit+offset` qator oladi, NDJSO
   "start": "2026-05-21T05:00:00Z",
   "end": "2026-05-21T05:30:00Z",
   "sort_order": "asc",
-  "name": "prod-errors"
+  "name": "prod-errors",
+  "format": "log.gz"
 }
 
 // 200
 { "job_id": "job_1714000000000000000" }
 ```
-`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. Pipe qo'shish mantiqi `/api/query`'dagi `sort` bilan bir xil (`vlclient.WithTimeSort`). `name` — fayl nomi (ixtiyoriy): bo'sh bo'lsa `export` prefix ishlatiladi. Server `sanitizeFileName` orqali tozalaydi (path separator olib tashlanadi, foydalanuvchi `.log` yozgan bo'lsa kesiladi) va doim oxiriga UTC timestamp `_YYYYMMDD-HHMMSS-mmm.log` qo'shadi — diskdagi fayllar unique bo'lishi va qachon export qilingani ko'rinishi uchun. Misol: `my-prod-logs` → `my-prod-logs_20260521-090655-123.log`. Server `worker.StartExport`'ni chaqiradi; goroutine boshlanadi, in-memory map'ga yoziladi (jobs file'ga saqlanmaydi — server restart bo'lsa joblar yo'qoladi, lekin export fayllari diskda qoladi).
+`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. `format`: `"log"` (xom NDJSON), `"log.gz"` (gzipped), `"tar.gz"` (tar+gzip arxiv); bo'sh bo'lsa `"log"`. Pipe qo'shish mantiqi `/api/query`'dagi `sort` bilan bir xil (`vlclient.WithTimeSort`). `name` — fayl nomi (ixtiyoriy): bo'sh bo'lsa `export` prefix ishlatiladi. Server `sanitizeFileName` orqali tozalaydi (path separator olib tashlanadi, foydalanuvchi qo'ygan `.log`/`.log.gz`/`.tar.gz` suffix kesiladi) va doim oxiriga UTC timestamp + tanlangan format suffix qo'shadi. Misol: `my-prod-logs` + `format=log.gz` → `my-prod-logs_20260521-090655-123.log.gz`.
+
+**Format implementatsiyasi (worker.go):**
+- `log` — `bufio.Writer` → fayl, streaming
+- `log.gz` — `bufio.Writer` → `gzip.Writer` → fayl, streaming
+- `tar.gz` — ikki bosqich: oldin xom faylni `.tmp`'ga yozadi (tar header'i size talab qiladi), keyin `.tar.gz` quradi va `.tmp`'ni o'chiradi
+
+Streaming worker (`vlclient.DoLongRunning`'dan oqim) shu uchta yo'lda ham ishlaydi. Job `Size` field — diskdagi yakuniy fayl hajmi (compressed size).
 
 ### GET `/api/jobs`
 Barcha joblar (filterlamayd, har user hammasini ko'radi). **`CreatedAt` DESC bo'yicha tartiblangan** — eng yangi joblar tepada.
