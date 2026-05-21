@@ -963,6 +963,76 @@
   margin: 6px 0;
 }
 
+/* Share modal */
+.share-modal {
+  max-width: 500px;
+}
+
+.share-modal-sub {
+  margin: -8px 0 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.share-modal-sub code {
+  background: var(--bg-surface-2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.share-url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.share-url-row .input {
+  flex: 1;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+
+.share-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--bg-surface-2);
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+
+.share-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.share-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.share-stat-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.share-warning {
+  font-size: 12px;
+  color: var(--warning-text);
+  background: var(--warning-soft);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
 /* Save modal */
 .save-modal-overlay {
   position: fixed;

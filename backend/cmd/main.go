@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"logdownloader/internal/auth"
 	"logdownloader/internal/config"
@@ -49,6 +50,19 @@ func main() {
 
 	w := worker.New(s)
 	h := handler.New(s, w)
+
+	// Vaqti chiqqan share linklarni davriy ravishda tozalash (har 1 daqiqada).
+	// Ravon (on-access) tekshiruv handler ichida ham bor, lekin foydalanuvchi
+	// kelmasa ham fayllar tozalanishi kerak.
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if n := s.CleanupExpiredShares(); n > 0 {
+				log.Printf("Cleaned up %d expired share(s)", n)
+			}
+		}
+	}()
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)

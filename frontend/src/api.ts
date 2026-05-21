@@ -75,6 +75,17 @@ export interface UserInfo {
   role: "admin" | "user";
 }
 
+export interface ShareLink {
+  token: string;
+  job_id: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string | null;
+  max_downloads: number;
+  download_count: number;
+  url: string;
+}
+
 export const api = {
   // Auth
   login: async (username: string, password: string): Promise<AuthUser & { token: string }> => {
@@ -198,6 +209,32 @@ export const api = {
     a.click();
     document.body.removeChild(a);
   },
+
+  // Share links
+  createShare: (
+    jobId: string,
+    opts: { maxDownloads?: number; expiresAt?: string | null },
+  ): Promise<ShareLink> =>
+    authFetch(`${API}/jobs/${jobId}/share`, {
+      method: "POST",
+      body: JSON.stringify({
+        max_downloads: opts.maxDownloads ?? 0,
+        expires_at: opts.expiresAt ?? "",
+      }),
+    }).then((r) => {
+      if (!r.ok) return r.text().then((t) => Promise.reject(t));
+      return r.json();
+    }),
+
+  getShare: (jobId: string): Promise<ShareLink | null> =>
+    authFetch(`${API}/jobs/${jobId}/share`).then((r) => {
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error("share lookup failed");
+      return r.json();
+    }),
+
+  revokeShare: (jobId: string): Promise<void> =>
+    authFetch(`${API}/jobs/${jobId}/share`, { method: "DELETE" }).then(() => {}),
 
   // Users (admin)
   getUsers: (): Promise<UserInfo[]> =>

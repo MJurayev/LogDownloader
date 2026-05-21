@@ -62,3 +62,16 @@ type ExportJob struct {
 	End            string    `json:"end,omitempty"`
 	SortOrder      string    `json:"sort_order,omitempty"`
 }
+
+// ShareLink — export faylga ommaviy URL beradi (auth talab qilmaydi).
+// ExpiresAt nil bo'lsa muddati cheksiz, MaxDownloads 0 bo'lsa cheklov yo'q.
+// Limit/expiry hodisalaridan keyin fayl + job + ushbu share o'chadi.
+type ShareLink struct {
+	Token         string     `json:"token"`            // URL'dagi token (URL-safe base64)
+	JobID         string     `json:"job_id"`
+	CreatedBy     string     `json:"created_by"`       // user ID
+	CreatedAt     time.Time  `json:"created_at"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	MaxDownloads  int        `json:"max_downloads"`    // 0 = cheksiz
+	DownloadCount int        `json:"download_count"`
+}

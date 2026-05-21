@@ -138,6 +138,55 @@ In-memory entry + diskdagi fayl o'chadi. Ownership yo'q.
 
 **Auth:** `Authorization: Bearer <jwt>` header standart yo'l. Brauzer `<a href download>` Authorization yubora olmagani sababli, **bu endpoint** uchun `?token=<jwt>` query param ham qabul qilinadi (auth middleware'da `strings.HasSuffix(path, "/download")` tekshiruvi). Boshqa endpointlarda query token ishlamaydi.
 
+## Share links
+
+Public download URL (`/dl/{token}`) auth talab qilmaydi. Boshqa endpointlar (create/get/revoke) auth ostida — har autentifikatsiyalangan foydalanuvchi har qanday job uchun share yaratishi mumkin.
+
+**1 share per job** qoidasi: yangi share yaratilsa, mavjud share avtomatik bekor qilinadi.
+
+### POST `/api/jobs/{id}/share`
+```json
+// req
+{
+  "max_downloads": 5,                      // 0 = cheksiz
+  "expires_at": "2026-05-22T10:00:00Z"     // RFC3339 UTC, bo'sh = cheksiz
+}
+
+// 201
+{
+  "token": "LmKTeynWiJTEtIiBuakjrw",
+  "job_id": "job_...",
+  "created_by": "<user-id>",
+  "created_at": "...",
+  "expires_at": "2026-05-22T10:00:00Z",
+  "max_downloads": 5,
+  "download_count": 0,
+  "url": "http://server/dl/LmKTeynWiJTEtIiBuakjrw"
+}
+```
+`expires_at` o'tmishda bo'lsa 400.
+
+### GET `/api/jobs/{id}/share`
+Job uchun joriy share ma'lumotini qaytaradi yoki 404.
+
+### DELETE `/api/jobs/{id}/share`
+Share'ni bekor qiladi. Yo'q bo'lsa 204 qaytadi (idempotent). **E'tibor:** revoke fayl/job'ni o'chirmaydi (faqat link bekor bo'ladi). Limit/expiry yetganda — o'chadi.
+
+### GET `/dl/{token}`
+Public download. Auth talab qilmaydi (URL `/api/`'dan tashqarida, middleware avtomatik o'tkazib yuboradi).
+
+Mantiq (atomik, store mutex ostida):
+1. Token bo'yicha share qidirish; yo'q bo'lsa 404
+2. `expires_at` o'tgan bo'lsa → share/job/fayl o'chiriladi, 410 Gone
+3. `download_count >= max_downloads` (max > 0) bo'lsa → o'chadi, 410 Gone
+4. Bog'liq job yo'q yoki `done` emas → o'chadi, 404
+5. `download_count++`, persist
+6. Fayl `http.ServeFile` orqali stream qilinadi
+7. Agar limit yetgan bo'lsa serve qilingandan keyin share+job+fayl o'chiriladi
+
+### Background cleanup
+Server `time.Ticker(1 * time.Minute)` orqali `s.CleanupExpiredShares()` ni chaqiradi — `expires_at` o'tgan har bir share, uning job va faylini olib tashlaydi.
+
 ## Users (admin only)
 
 ### GET `/api/users`

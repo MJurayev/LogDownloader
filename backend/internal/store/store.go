@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"logdownloader/internal/model"
 )
@@ -17,6 +18,7 @@ type Store struct {
 	users    map[string]model.User
 	queries  map[string]model.SavedQuery
 	jobs     map[string]*model.ExportJob
+	shares   map[string]*model.ShareLink // key: token
 }
 
 func New(dataDir string) (*Store, error) {
@@ -32,11 +34,13 @@ func New(dataDir string) (*Store, error) {
 		users:   make(map[string]model.User),
 		queries: make(map[string]model.SavedQuery),
 		jobs:    make(map[string]*model.ExportJob),
+		shares:  make(map[string]*model.ShareLink),
 	}
 
 	s.loadSettings()
 	s.loadQueries()
 	s.loadUsers()
+	s.loadShares()
 	return s, nil
 }
 
@@ -238,8 +242,146 @@ func (s *Store) DeleteJob(id string) {
 	if job, ok := s.jobs[id]; ok {
 		os.Remove(filepath.Join(s.ExportsDir(), job.FileName))
 		delete(s.jobs, id)
+		// Birga shu job uchun yaratilgan share linklarni ham olib tashlash
+		for token, sh := range s.shares {
+			if sh.JobID == id {
+				delete(s.shares, token)
+			}
+		}
+		s.saveFile("shares.json", s.shares)
 	}
 }
+
+// Shares
+
+func (s *Store) loadShares() {
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "shares.json"))
+	if err != nil {
+		return
+	}
+	json.Unmarshal(data, &s.shares)
+}
+
+func (s *Store) GetShare(token string) *model.ShareLink {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.shares[token]
+}
+
+func (s *Store) GetShareByJob(jobID string) *model.ShareLink {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, sh := range s.shares {
+		if sh.JobID == jobID {
+			return sh
+		}
+	}
+	return nil
+}
+
+// SaveShare yangi share saqlaydi. Agar shu job uchun avvalgi share bo'lsa, u
+// olib tashlanadi (1 share per job qoidasi).
+func (s *Store) SaveShare(share *model.ShareLink) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for token, sh := range s.shares {
+		if sh.JobID == share.JobID {
+			delete(s.shares, token)
+		}
+	}
+	s.shares[share.Token] = share
+	return s.saveFile("shares.json", s.shares)
+}
+
+func (s *Store) DeleteShare(token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.shares, token)
+	return s.saveFile("shares.json", s.shares)
+}
+
+// ConsumeShare atomik tarzda: tekshiradi → countni oshiradi → agar limitga
+// yetgan bo'lsa share, job va faylni o'chiradi. Qaytaradi:
+//   share — ishlatilayotgan share (mavjud bo'lsa)
+//   filePath — yuklab olish uchun fayl yo'li (mavjud bo'lsa)
+//   err — invalidlanish sababi ("not found", "expired", "exhausted")
+//   exhaustedAfter — true bo'lsa fayl serve qilingandan keyin tozalanishi kerak
+func (s *Store) ConsumeShare(token string) (share *model.ShareLink, filePath string, err error, exhaustedAfter bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sh, ok := s.shares[token]
+	if !ok {
+		return nil, "", ErrShareNotFound, false
+	}
+	now := time.Now()
+	if sh.ExpiresAt != nil && !sh.ExpiresAt.After(now) {
+		s.purgeShareLocked(sh)
+		return nil, "", ErrShareExpired, false
+	}
+	if sh.MaxDownloads > 0 && sh.DownloadCount >= sh.MaxDownloads {
+		s.purgeShareLocked(sh)
+		return nil, "", ErrShareExhausted, false
+	}
+
+	job, jobOK := s.jobs[sh.JobID]
+	if !jobOK || job.Status != model.JobDone {
+		s.purgeShareLocked(sh)
+		return nil, "", ErrShareNotFound, false
+	}
+
+	sh.DownloadCount++
+	exhaustedAfter = sh.MaxDownloads > 0 && sh.DownloadCount >= sh.MaxDownloads
+	s.saveFile("shares.json", s.shares)
+
+	return sh, filepath.Join(s.ExportsDir(), job.FileName), nil, exhaustedAfter
+}
+
+// PurgeShare share, ushbu job va diskdagi faylni o'chiradi.
+// Token bo'yicha yo'q bo'lsa hech narsa qilmaydi.
+func (s *Store) PurgeShare(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sh, ok := s.shares[token]; ok {
+		s.purgeShareLocked(sh)
+	}
+}
+
+func (s *Store) purgeShareLocked(sh *model.ShareLink) {
+	if job, ok := s.jobs[sh.JobID]; ok {
+		os.Remove(filepath.Join(s.ExportsDir(), job.FileName))
+		delete(s.jobs, sh.JobID)
+	}
+	delete(s.shares, sh.Token)
+	s.saveFile("shares.json", s.shares)
+}
+
+// CleanupExpiredShares fon ravishda chaqiriladi (har daqiqada). Vaqti chiqqan
+// share'larni, ularning job va fayllarini olib tashlaydi. Tozalangan sonni
+// qaytaradi.
+func (s *Store) CleanupExpiredShares() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	removed := 0
+	for _, sh := range s.shares {
+		if sh.ExpiresAt != nil && !sh.ExpiresAt.After(now) {
+			s.purgeShareLocked(sh)
+			removed++
+		}
+	}
+	return removed
+}
+
+var (
+	ErrShareNotFound  = shareErr("share not found")
+	ErrShareExpired   = shareErr("share expired")
+	ErrShareExhausted = shareErr("download limit reached")
+)
+
+type shareErr string
+
+func (e shareErr) Error() string { return string(e) }
 
 func (s *Store) saveFile(name string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")

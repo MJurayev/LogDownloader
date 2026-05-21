@@ -2,7 +2,10 @@ package handler
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"logdownloader/internal/auth"
 	"logdownloader/internal/model"
@@ -53,6 +57,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs", h.getJobs)
 	mux.HandleFunc("DELETE /api/jobs/{id}", h.deleteJob)
 	mux.HandleFunc("GET /api/jobs/{id}/download", h.downloadJob)
+
+	// Share links
+	mux.HandleFunc("POST /api/jobs/{id}/share", h.createShare)
+	mux.HandleFunc("GET /api/jobs/{id}/share", h.getShare)
+	mux.HandleFunc("DELETE /api/jobs/{id}/share", h.revokeShare)
+	// Public download — `/dl/...` /api/ prefiksiga kirmaydi, shu sababli auth
+	// middleware uni avtomatik o'tkazib yuboradi.
+	mux.HandleFunc("GET /dl/{token}", h.downloadShare)
 
 	// User management (admin only)
 	mux.HandleFunc("GET /api/users", auth.RequireAdmin(h.getUsers))
@@ -428,6 +440,157 @@ func (h *Handler) deleteJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	h.store.DeleteJob(id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Share links
+
+func (h *Handler) createShare(w http.ResponseWriter, r *http.Request) {
+	u := auth.GetUser(r)
+	jobID := r.PathValue("id")
+
+	job := h.store.GetJob(jobID)
+	if job == nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+	if job.Status != model.JobDone {
+		http.Error(w, "job is not completed yet", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		MaxDownloads int    `json:"max_downloads"`
+		ExpiresAt    string `json:"expires_at"` // RFC3339 UTC, ixtiyoriy
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.MaxDownloads < 0 {
+		req.MaxDownloads = 0
+	}
+
+	var expiresAt *time.Time
+	if s := strings.TrimSpace(req.ExpiresAt); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			http.Error(w, "invalid expires_at: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !t.After(time.Now()) {
+			http.Error(w, "expires_at must be in the future", http.StatusBadRequest)
+			return
+		}
+		expiresAt = &t
+	}
+
+	token, err := generateShareToken()
+	if err != nil {
+		http.Error(w, "failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	share := &model.ShareLink{
+		Token:         token,
+		JobID:         jobID,
+		CreatedBy:     u.ID,
+		CreatedAt:     time.Now(),
+		ExpiresAt:     expiresAt,
+		MaxDownloads:  req.MaxDownloads,
+		DownloadCount: 0,
+	}
+	if err := h.store.SaveShare(share); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, shareResponse(r, share))
+}
+
+func (h *Handler) getShare(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	share := h.store.GetShareByJob(jobID)
+	if share == nil {
+		http.Error(w, "no share for this job", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, shareResponse(r, share))
+}
+
+func (h *Handler) revokeShare(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	share := h.store.GetShareByJob(jobID)
+	if share == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := h.store.DeleteShare(share.Token); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) downloadShare(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+
+	share, filePath, err, exhaustedAfter := h.store.ConsumeShare(token)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrShareNotFound):
+			http.Error(w, "link not found", http.StatusNotFound)
+		case errors.Is(err, store.ErrShareExpired), errors.Is(err, store.ErrShareExhausted):
+			http.Error(w, err.Error(), http.StatusGone)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	job := h.store.GetJob(share.JobID)
+	fileName := "export.log"
+	if job != nil {
+		fileName = job.FileName
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeFile(w, r, filePath)
+
+	if exhaustedAfter {
+		h.store.PurgeShare(token)
+	}
+}
+
+func generateShareToken() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// shareResponse — share modelni response uchun tayyorlaydi, full URL ham qo'shadi.
+func shareResponse(r *http.Request, sh *model.ShareLink) map[string]any {
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	host := r.Host
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		host = h
+	}
+	return map[string]any{
+		"token":          sh.Token,
+		"job_id":         sh.JobID,
+		"created_by":     sh.CreatedBy,
+		"created_at":     sh.CreatedAt,
+		"expires_at":     sh.ExpiresAt,
+		"max_downloads":  sh.MaxDownloads,
+		"download_count": sh.DownloadCount,
+		"url":            fmt.Sprintf("%s://%s/dl/%s", scheme, host, sh.Token),
+	}
 }
 
 func (h *Handler) downloadJob(w http.ResponseWriter, r *http.Request) {
