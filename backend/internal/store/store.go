@@ -13,6 +13,7 @@ type Store struct {
 	mu       sync.RWMutex
 	dataDir  string
 	settings model.Settings
+	users    map[string]model.User
 	queries  map[string]model.SavedQuery
 	jobs     map[string]*model.ExportJob
 }
@@ -27,12 +28,14 @@ func New(dataDir string) (*Store, error) {
 
 	s := &Store{
 		dataDir: dataDir,
+		users:   make(map[string]model.User),
 		queries: make(map[string]model.SavedQuery),
 		jobs:    make(map[string]*model.ExportJob),
 	}
 
 	s.loadSettings()
 	s.loadQueries()
+	s.loadUsers()
 	return s, nil
 }
 
@@ -106,6 +109,88 @@ func (s *Store) loadQueries() {
 		return
 	}
 	json.Unmarshal(data, &s.queries)
+}
+
+// Users
+
+func (s *Store) GetUsers() []model.User {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]model.User, 0, len(s.users))
+	for _, u := range s.users {
+		result = append(result, u)
+	}
+	return result
+}
+
+func (s *Store) GetUser(id string) *model.User {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if u, ok := s.users[id]; ok {
+		return &u
+	}
+	return nil
+}
+
+func (s *Store) GetUserByUsername(username string) *model.User {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, u := range s.users {
+		if u.Username == username {
+			return &u
+		}
+	}
+	return nil
+}
+
+func (s *Store) SaveUser(u model.User) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.users[u.ID] = u
+	return s.saveFile("users.json", s.users)
+}
+
+func (s *Store) DeleteUser(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.users, id)
+	return s.saveFile("users.json", s.users)
+}
+
+func (s *Store) loadUsers() {
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "users.json"))
+	if err != nil {
+		return
+	}
+	json.Unmarshal(data, &s.users)
+}
+
+// Datasources filtered by user
+
+func (s *Store) GetDatasourcesForUser(userID string) []model.Datasource {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []model.Datasource
+	for _, ds := range s.settings.Datasources {
+		if ds.Global || ds.OwnerID == userID {
+			result = append(result, ds)
+		}
+	}
+	return result
+}
+
+// Queries filtered by user
+
+func (s *Store) GetQueriesForUser(userID string) []model.SavedQuery {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []model.SavedQuery
+	for _, q := range s.queries {
+		if q.Global || q.OwnerID == userID {
+			result = append(result, q)
+		}
+	}
+	return result
 }
 
 // Jobs

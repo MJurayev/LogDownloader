@@ -18,6 +18,8 @@ services:
     build: .
     ports:
       - "3000:3000"
+    environment:
+      DATA_DIR: /app/data
     volumes:
       - app-data:/app/data
     depends_on:

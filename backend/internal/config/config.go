@@ -8,8 +8,9 @@ import (
 )
 
 type Config struct {
-	Port    string `yaml:"port"`
-	DataDir string `yaml:"data_dir"`
+	Port      string `yaml:"port"`
+	DataDir   string `yaml:"data_dir"`
+	JWTSecret string `yaml:"jwt_secret"`
 }
 
 func Load() Config {
@@ -48,6 +49,9 @@ func Load() Config {
 	}
 	if v := os.Getenv("DATA_DIR"); v != "" {
 		cfg.DataDir = v
+	}
+	if v := os.Getenv("JWT_SECRET"); v != "" {
+		cfg.JWTSecret = v
 	}
 
 	return cfg

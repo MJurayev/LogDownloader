@@ -24,7 +24,7 @@ func New(s *store.Store) *Worker {
 	return &Worker{store: s}
 }
 
-func (w *Worker) StartExport(query, datasourceID string) string {
+func (w *Worker) StartExport(query, datasourceID, start, end, sortOrder string) string {
 	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
 	fileName := fmt.Sprintf("export_%s.log", jobID)
 
@@ -41,6 +41,9 @@ func (w *Worker) StartExport(query, datasourceID string) string {
 		Status:         model.JobRunning,
 		FileName:       fileName,
 		CreatedAt:      time.Now(),
+		Start:          start,
+		End:            end,
+		SortOrder:      sortOrder,
 	}
 
 	w.store.AddJob(job)
@@ -64,9 +67,15 @@ func (w *Worker) runExport(job *model.ExportJob) {
 	exportURL := fmt.Sprintf("%s/select/logsql/query", baseURL)
 
 	params := url.Values{}
-	params.Set("query", job.Query)
+	params.Set("query", vlclient.WithTimeSort(job.Query, job.SortOrder))
+	if job.Start != "" {
+		params.Set("start", job.Start)
+	}
+	if job.End != "" {
+		params.Set("end", job.End)
+	}
 
-	resp, err := vlclient.Do("GET", exportURL+"?"+params.Encode(), *ds)
+	resp, err := vlclient.DoLongRunning("GET", exportURL+"?"+params.Encode(), *ds)
 	if err != nil {
 		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("request failed: %v", err), 0)
 		return
@@ -88,22 +97,32 @@ func (w *Worker) runExport(job *model.ExportJob) {
 	defer f.Close()
 
 	writer := bufio.NewWriter(f)
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	reader := bufio.NewReaderSize(resp.Body, 64*1024)
 
 	var lines int64
-	for scanner.Scan() {
-		writer.WriteString(scanner.Text())
-		writer.WriteByte('\n')
-		lines++
-		if lines%1000 == 0 {
-			w.store.UpdateJobStatus(job.ID, model.JobRunning, "", lines)
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			if _, werr := writer.WriteString(line); werr != nil {
+				w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("write error: %v", werr), lines)
+				return
+			}
+			lines++
+			if lines%1000 == 0 {
+				w.store.UpdateJobStatus(job.ID, model.JobRunning, "", lines)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writer.Flush()
+			w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("read error: %v", err), lines)
+			return
 		}
 	}
-	writer.Flush()
-
-	if err := scanner.Err(); err != nil {
-		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("read error: %v", err), lines)
+	if err := writer.Flush(); err != nil {
+		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("flush error: %v", err), lines)
 		return
 	}
 

@@ -4,7 +4,7 @@ import "./Pages.css";
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState<ExportJob[]>([]);
-  const intervalRef = useRef<number>();
+  const intervalRef = useRef<number | undefined>(undefined);
 
   const loadJobs = async () => {
     const data = await api.getJobs();
@@ -20,6 +20,14 @@ export default function JobsPage() {
   const handleDelete = async (id: string) => {
     await api.deleteJob(id);
     loadJobs();
+  };
+
+  const handleDownload = async (id: string) => {
+    try {
+      await api.downloadJob(id);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Yuklab olishda xatolik");
+    }
   };
 
   const statusBadge = (status: string) => {
@@ -46,13 +54,12 @@ export default function JobsPage() {
         </div>
         <div className="card-actions">
           {job.status === "done" && (
-            <a
-              href={api.downloadJob(job.id)}
+            <button
+              onClick={() => handleDownload(job.id)}
               className="btn btn-small btn-primary"
-              download
             >
               Yuklab olish
-            </a>
+            </button>
           )}
           <button
             onClick={() => handleDelete(job.id)}
@@ -63,6 +70,12 @@ export default function JobsPage() {
         </div>
       </div>
       <code className="query-code">{job.query}</code>
+      {(job.start || job.end) && (
+        <div className="job-range">
+          <span title={job.start ? `UTC: ${job.start}` : ""}>From: {job.start ? new Date(job.start).toLocaleString() : "—"}</span>
+          <span title={job.end ? `UTC: ${job.end}` : ""}>To: {job.end ? new Date(job.end).toLocaleString() : "—"}</span>
+        </div>
+      )}
       {job.error && <div className="error-text">{job.error}</div>}
       <div className="job-time">
         {new Date(job.created_at).toLocaleString()}

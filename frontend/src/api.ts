@@ -1,5 +1,26 @@
 const API = "/api";
 
+function getToken(): string | null {
+  return localStorage.getItem("token");
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
+async function authFetch(url: string, opts: RequestInit = {}): Promise<Response> {
+  const headers = { ...authHeaders(), ...(opts.headers as Record<string, string> || {}) };
+  const res = await fetch(url, { ...opts, headers });
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    window.location.href = "/login";
+  }
+  return res;
+}
+
 export interface Datasource {
   id: string;
   name: string;
@@ -7,10 +28,8 @@ export interface Datasource {
   username?: string;
   password?: string;
   headers?: Record<string, string>;
-}
-
-export interface Settings {
-  datasources: Datasource[];
+  global: boolean;
+  owner_id: string;
 }
 
 export interface SavedQuery {
@@ -18,6 +37,8 @@ export interface SavedQuery {
   name: string;
   query: string;
   datasource_id?: string;
+  global: boolean;
+  owner_id: string;
 }
 
 export interface ExportJob {
@@ -30,6 +51,8 @@ export interface ExportJob {
   created_at: string;
   error?: string;
   lines: number;
+  start?: string;
+  end?: string;
 }
 
 export interface QueryResult {
@@ -40,31 +63,69 @@ export interface QueryResult {
   offset: number;
 }
 
-export const api = {
-  // Settings
-  getSettings: (): Promise<Settings> =>
-    fetch(`${API}/settings`).then((r) => r.json()),
+export interface AuthUser {
+  user_id: string;
+  username: string;
+  role: "admin" | "user";
+}
 
-  updateSettings: (s: Settings): Promise<Settings> =>
-    fetch(`${API}/settings`, {
-      method: "PUT",
+export interface UserInfo {
+  id: string;
+  username: string;
+  role: "admin" | "user";
+}
+
+export const api = {
+  // Auth
+  login: async (username: string, password: string): Promise<AuthUser & { token: string }> => {
+    const res = await fetch(`${API}/login`, {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(s),
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) throw new Error("Invalid credentials");
+    return res.json();
+  },
+
+  me: (): Promise<AuthUser> => authFetch(`${API}/me`).then((r) => r.json()),
+
+  // Datasources
+  getDatasources: (): Promise<Datasource[]> =>
+    authFetch(`${API}/datasources`).then((r) => r.json()),
+
+  createDatasource: (ds: Omit<Datasource, "id" | "owner_id">): Promise<Datasource> =>
+    authFetch(`${API}/datasources`, {
+      method: "POST",
+      body: JSON.stringify(ds),
     }).then((r) => r.json()),
+
+  updateDatasource: (id: string, ds: Omit<Datasource, "id" | "owner_id">): Promise<Datasource> =>
+    authFetch(`${API}/datasources/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(ds),
+    }).then((r) => r.json()),
+
+  deleteDatasource: (id: string): Promise<void> =>
+    authFetch(`${API}/datasources/${id}`, { method: "DELETE" }).then(() => {}),
 
   // Queries
   getQueries: (): Promise<SavedQuery[]> =>
-    fetch(`${API}/queries`).then((r) => r.json()),
+    authFetch(`${API}/queries`).then((r) => r.json()),
 
-  createQuery: (name: string, query: string, datasourceId?: string): Promise<SavedQuery> =>
-    fetch(`${API}/queries`, {
+  createQuery: (name: string, query: string, datasourceId?: string, global?: boolean): Promise<SavedQuery> =>
+    authFetch(`${API}/queries`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, query, datasource_id: datasourceId }),
+      body: JSON.stringify({ name, query, datasource_id: datasourceId, global: global || false }),
+    }).then((r) => r.json()),
+
+  updateQuery: (id: string, name: string, query: string, datasourceId?: string, global?: boolean): Promise<SavedQuery> =>
+    authFetch(`${API}/queries/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ name, query, datasource_id: datasourceId, global: global || false }),
     }).then((r) => r.json()),
 
   deleteQuery: (id: string): Promise<void> =>
-    fetch(`${API}/queries/${id}`, { method: "DELETE" }).then(() => {}),
+    authFetch(`${API}/queries/${id}`, { method: "DELETE" }).then(() => {}),
 
   // Query logs
   queryLogs: (
@@ -73,7 +134,8 @@ export const api = {
     limit: number,
     offset: number,
     start?: string,
-    end?: string
+    end?: string,
+    sortOrder?: "asc" | "desc",
   ): Promise<QueryResult> => {
     const params = new URLSearchParams({
       query,
@@ -83,25 +145,79 @@ export const api = {
     });
     if (start) params.set("start", start);
     if (end) params.set("end", end);
-    return fetch(`${API}/query?${params}`).then((r) => {
+    if (sortOrder) params.set("sort", sortOrder);
+    return authFetch(`${API}/query?${params}`).then((r) => {
       if (!r.ok) return r.text().then((t) => Promise.reject(t));
       return r.json();
     });
   },
 
   // Export & Jobs
-  startExport: (query: string, datasourceId: string): Promise<{ job_id: string }> =>
-    fetch(`${API}/export`, {
+  startExport: (
+    query: string,
+    datasourceId: string,
+    start?: string,
+    end?: string,
+    sortOrder?: "asc" | "desc",
+  ): Promise<{ job_id: string }> =>
+    authFetch(`${API}/export`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, datasource_id: datasourceId }),
+      body: JSON.stringify({
+        query,
+        datasource_id: datasourceId,
+        start: start || "",
+        end: end || "",
+        sort_order: sortOrder || "",
+      }),
     }).then((r) => r.json()),
 
   getJobs: (): Promise<ExportJob[]> =>
-    fetch(`${API}/jobs`).then((r) => r.json()),
+    authFetch(`${API}/jobs`).then((r) => r.json()),
 
   deleteJob: (id: string): Promise<void> =>
-    fetch(`${API}/jobs/${id}`, { method: "DELETE" }).then(() => {}),
+    authFetch(`${API}/jobs/${id}`, { method: "DELETE" }).then(() => {}),
 
-  downloadJob: (id: string): string => `${API}/jobs/${id}/download`,
+  // Browser <a download> Authorization header'ni yubora olmaydi. Shu sababli
+  // faylni JWT bilan fetch qilamiz, blob URL yaratamiz va dasturiy click bilan
+  // yuklab olamiz.
+  downloadJob: async (id: string): Promise<void> => {
+    const res = await authFetch(`${API}/jobs/${id}/download`);
+    if (!res.ok) throw new Error(`Yuklab olishda xatolik: ${res.status}`);
+
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename=([^;]+)/);
+    const filename = match ? match[1].trim().replace(/^"|"$/g, "") : `export_${id}.log`;
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  },
+
+  // Users (admin)
+  getUsers: (): Promise<UserInfo[]> =>
+    authFetch(`${API}/users`).then((r) => r.json()),
+
+  createUser: (username: string, password: string, role: string): Promise<UserInfo> =>
+    authFetch(`${API}/users`, {
+      method: "POST",
+      body: JSON.stringify({ username, password, role }),
+    }).then((r) => r.json()),
+
+  updateUser: (id: string, role: string, password?: string): Promise<UserInfo> =>
+    authFetch(`${API}/users/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ role, password: password || "" }),
+    }).then((r) => r.json()),
+
+  deleteUser: (id: string): Promise<void> =>
+    authFetch(`${API}/users/${id}`, { method: "DELETE" }).then(() => {}),
 };

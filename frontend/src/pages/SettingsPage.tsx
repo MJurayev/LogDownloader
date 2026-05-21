@@ -2,95 +2,171 @@ import { useState, useEffect } from "react";
 import { api, type Datasource } from "../api";
 import "./Pages.css";
 
-function genId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-}
+type HeaderRow = { key: string; value: string };
+type DSForm = {
+  name: string;
+  url: string;
+  username: string;
+  password: string;
+  global: boolean;
+  headers: HeaderRow[];
+};
 
-function newDatasource(): Datasource {
-  return { id: genId(), name: "", url: "", username: "", password: "", headers: {} };
-}
+const emptyForm = (): DSForm => ({
+  name: "",
+  url: "",
+  username: "",
+  password: "",
+  global: false,
+  headers: [],
+});
 
-export default function SettingsPage() {
+const formFromDS = (ds: Datasource): DSForm => ({
+  name: ds.name,
+  url: ds.url,
+  username: ds.username || "",
+  password: ds.password || "",
+  global: ds.global,
+  headers: Object.entries(ds.headers || {}).map(([key, value]) => ({ key, value })),
+});
+
+const formToBody = (f: DSForm): Omit<Datasource, "id" | "owner_id"> => {
+  const headersMap: Record<string, string> = {};
+  f.headers.forEach((h) => {
+    const k = h.key.trim();
+    if (k) headersMap[k] = h.value;
+  });
+  return {
+    name: f.name,
+    url: f.url,
+    username: f.username || undefined,
+    password: f.password || undefined,
+    headers: Object.keys(headersMap).length > 0 ? headersMap : undefined,
+    global: f.global,
+  };
+};
+
+export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
   const [datasources, setDatasources] = useState<Datasource[]>([]);
-  const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    api.getSettings().then((s) => {
-      setDatasources(s.datasources || []);
-      setLoading(false);
-    });
-  }, []);
+  const [newDS, setNewDS] = useState<DSForm>(emptyForm());
+  const [showNew, setShowNew] = useState(false);
 
-  const handleSave = async () => {
-    const cleaned = datasources.map((ds) => ({
-      ...ds,
-      username: ds.username || undefined,
-      password: ds.password || undefined,
-      headers: ds.headers && Object.keys(ds.headers).length > 0 ? ds.headers : undefined,
-    }));
-    await api.updateSettings({ datasources: cleaned });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const [editingDS, setEditingDS] = useState<DSForm | null>(null);
+
+  const loadDatasources = async () => {
+    const data = await api.getDatasources();
+    setDatasources(data || []);
+    setLoading(false);
   };
 
-  const addDatasource = () => {
-    const ds = newDatasource();
-    setDatasources([...datasources, ds]);
-    setExpandedId(ds.id);
-  };
+  useEffect(() => { loadDatasources(); }, []);
 
-  const removeDatasource = (id: string) => {
-    setDatasources(datasources.filter((d) => d.id !== id));
-    if (expandedId === id) setExpandedId(null);
-  };
-
-  const updateDS = (id: string, field: string, value: string) => {
-    setDatasources(datasources.map((d) =>
-      d.id === id ? { ...d, [field]: value } : d
-    ));
-  };
-
-  const [dsHeaders, setDsHeaders] = useState<Record<string, { key: string; value: string }[]>>({});
-
-  useEffect(() => {
-    const map: Record<string, { key: string; value: string }[]> = {};
-    datasources.forEach((ds) => {
-      if (!dsHeaders[ds.id]) {
-        map[ds.id] = Object.entries(ds.headers || {}).map(([key, value]) => ({ key, value }));
-      } else {
-        map[ds.id] = dsHeaders[ds.id];
-      }
-    });
-    if (Object.keys(map).length > 0 && Object.keys(dsHeaders).length === 0) {
-      setDsHeaders(map);
+  const toggleExpand = (ds: Datasource) => {
+    if (expandedId === ds.id) {
+      setExpandedId(null);
+      setEditingDS(null);
+    } else {
+      setExpandedId(ds.id);
+      setEditingDS(formFromDS(ds));
     }
-  }, [datasources]);
-
-  const getHeaders = (ds: Datasource) => dsHeaders[ds.id] || [];
-
-  const updateHeaderRow = (dsId: string, idx: number, field: "key" | "value", val: string) => {
-    const arr = [...(dsHeaders[dsId] || [])];
-    arr[idx] = { ...arr[idx], [field]: val };
-    setDsHeaders({ ...dsHeaders, [dsId]: arr });
-    // Sync to datasources
-    const map: Record<string, string> = {};
-    arr.forEach((h) => { if (h.key.trim()) map[h.key.trim()] = h.value; });
-    setDatasources(datasources.map((d) => d.id === dsId ? { ...d, headers: map } : d));
   };
 
-  const addHeaderRow = (dsId: string) => {
-    const arr = [...(dsHeaders[dsId] || []), { key: "", value: "" }];
-    setDsHeaders({ ...dsHeaders, [dsId]: arr });
+  const handleCreate = async () => {
+    if (!newDS.name.trim() || !newDS.url.trim()) return;
+    setSaving(true);
+    await api.createDatasource(formToBody(newDS));
+    setNewDS(emptyForm());
+    setShowNew(false);
+    await loadDatasources();
+    setSaving(false);
   };
 
-  const removeHeaderRow = (dsId: string, idx: number) => {
-    const arr = (dsHeaders[dsId] || []).filter((_, i) => i !== idx);
-    setDsHeaders({ ...dsHeaders, [dsId]: arr });
-    const map: Record<string, string> = {};
-    arr.forEach((h) => { if (h.key.trim()) map[h.key.trim()] = h.value; });
-    setDatasources(datasources.map((d) => d.id === dsId ? { ...d, headers: map } : d));
+  const handleUpdate = async () => {
+    if (!editingDS || !expandedId) return;
+    if (!editingDS.name.trim() || !editingDS.url.trim()) return;
+    setSaving(true);
+    await api.updateDatasource(expandedId, formToBody(editingDS));
+    setEditingDS(null);
+    setExpandedId(null);
+    await loadDatasources();
+    setSaving(false);
+  };
+
+  const handleDelete = async (id: string) => {
+    await api.deleteDatasource(id);
+    if (expandedId === id) {
+      setExpandedId(null);
+      setEditingDS(null);
+    }
+    loadDatasources();
+  };
+
+  const renderForm = (form: DSForm, setForm: (f: DSForm) => void) => {
+    const addHeader = () => setForm({ ...form, headers: [...form.headers, { key: "", value: "" }] });
+    const updateHeader = (i: number, field: "key" | "value", v: string) =>
+      setForm({ ...form, headers: form.headers.map((h, idx) => (idx === i ? { ...h, [field]: v } : h)) });
+    const removeHeader = (i: number) =>
+      setForm({ ...form, headers: form.headers.filter((_, idx) => idx !== i) });
+
+    return (
+      <>
+        <div className="form-group">
+          <label className="label">Nomi</label>
+          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Production VictoriaLogs" className="input" />
+        </div>
+        <div className="form-group">
+          <label className="label">URL</label>
+          <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="http://victorialogs:9428" className="input" />
+        </div>
+        <div className="form-group">
+          <label className="label">Basic Auth (ixtiyoriy)</label>
+          <div className="settings-auth-row">
+            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Username" className="input" />
+            <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password" className="input" />
+          </div>
+        </div>
+        <div className="form-group">
+          <label className="label">Headers (ixtiyoriy)</label>
+          {form.headers.map((h, i) => (
+            <div key={i} className="settings-header-row" style={{ marginBottom: 8 }}>
+              <input
+                value={h.key}
+                onChange={(e) => updateHeader(i, "key", e.target.value)}
+                placeholder="Header name (masalan: X-Tenant)"
+                className="input"
+              />
+              <input
+                value={h.value}
+                onChange={(e) => updateHeader(i, "value", e.target.value)}
+                placeholder="Value"
+                className="input"
+              />
+              <button
+                type="button"
+                onClick={() => removeHeader(i)}
+                className="btn btn-small btn-danger"
+                title="Header o'chirish"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button type="button" onClick={addHeader} className="btn btn-small btn-outline">
+            + Header qo'shish
+          </button>
+        </div>
+        {isAdmin && (
+          <label className="global-check">
+            <input type="checkbox" checked={form.global} onChange={(e) => setForm({ ...form, global: e.target.checked })} />
+            Global (barcha userlarga ko'rinadi)
+          </label>
+        )}
+      </>
+    );
   };
 
   if (loading) return <div className="page">Yuklanmoqda...</div>;
@@ -103,15 +179,16 @@ export default function SettingsPage() {
       <div className="ds-list">
         {datasources.map((ds) => (
           <div key={ds.id} className="ds-card">
-            <div className="ds-card-header" onClick={() => setExpandedId(expandedId === ds.id ? null : ds.id)}>
+            <div className="ds-card-header" onClick={() => toggleExpand(ds)}>
               <div className="ds-card-title">
                 <span className="ds-dot" />
-                <strong>{ds.name || "Nomsiz datasource"}</strong>
-                <span className="ds-url-hint">{ds.url || "URL kiritilmagan"}</span>
+                <strong>{ds.name || "Nomsiz"}</strong>
+                {ds.global && <span className="global-badge">Global</span>}
+                <span className="ds-url-hint">{ds.url}</span>
               </div>
               <div className="ds-card-actions">
                 <button
-                  onClick={(e) => { e.stopPropagation(); removeDatasource(ds.id); }}
+                  onClick={(e) => { e.stopPropagation(); handleDelete(ds.id); }}
                   className="btn btn-small btn-danger"
                 >
                   O'chirish
@@ -120,73 +197,22 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            {expandedId === ds.id && (
+            {expandedId === ds.id && editingDS && (
               <div className="ds-card-body">
-                <div className="form-group">
-                  <label className="label">Nomi</label>
-                  <input
-                    value={ds.name}
-                    onChange={(e) => updateDS(ds.id, "name", e.target.value)}
-                    placeholder="Masalan: Production VictoriaLogs"
-                    className="input"
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="label">URL</label>
-                  <input
-                    value={ds.url}
-                    onChange={(e) => updateDS(ds.id, "url", e.target.value)}
-                    placeholder="http://victorialogs:9428"
-                    className="input"
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="label">Basic Auth (ixtiyoriy)</label>
-                  <div className="settings-auth-row">
-                    <input
-                      value={ds.username || ""}
-                      onChange={(e) => updateDS(ds.id, "username", e.target.value)}
-                      placeholder="Username"
-                      className="input"
-                    />
-                    <input
-                      type="password"
-                      value={ds.password || ""}
-                      onChange={(e) => updateDS(ds.id, "password", e.target.value)}
-                      placeholder="Password"
-                      className="input"
-                    />
-                  </div>
-                </div>
-                <div className="form-group">
-                  <label className="label">Headers (ixtiyoriy)</label>
-                  {getHeaders(ds).map((h, i) => (
-                    <div key={i} className="settings-header-row">
-                      <input
-                        value={h.key}
-                        onChange={(e) => updateHeaderRow(ds.id, i, "key", e.target.value)}
-                        placeholder="Header nomi"
-                        className="input"
-                      />
-                      <input
-                        value={h.value}
-                        onChange={(e) => updateHeaderRow(ds.id, i, "value", e.target.value)}
-                        placeholder="Qiymati"
-                        className="input"
-                      />
-                      <button
-                        onClick={() => removeHeaderRow(ds.id, i)}
-                        className="btn btn-small btn-danger"
-                      >
-                        &times;
-                      </button>
-                    </div>
-                  ))}
+                {renderForm(editingDS, setEditingDS as (f: DSForm) => void)}
+                <div className="ds-bottom-actions" style={{ marginTop: 14 }}>
                   <button
-                    onClick={() => addHeaderRow(ds.id)}
+                    onClick={() => { setExpandedId(null); setEditingDS(null); }}
                     className="btn btn-small btn-outline"
                   >
-                    + Header
+                    Bekor
+                  </button>
+                  <button
+                    onClick={handleUpdate}
+                    disabled={saving || !editingDS.name.trim() || !editingDS.url.trim()}
+                    className="btn btn-small btn-primary"
+                  >
+                    {saving ? "..." : "Saqlash"}
                   </button>
                 </div>
               </div>
@@ -195,15 +221,32 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      <div className="ds-bottom-actions">
-        <button onClick={addDatasource} className="btn btn-outline">
+      {showNew ? (
+        <div className="ds-card" style={{ marginBottom: 16 }}>
+          <div className="ds-card-body" style={{ paddingTop: 16 }}>
+            {renderForm(newDS, setNewDS)}
+            <div className="ds-bottom-actions" style={{ marginTop: 14 }}>
+              <button
+                onClick={() => { setShowNew(false); setNewDS(emptyForm()); }}
+                className="btn btn-small btn-outline"
+              >
+                Bekor
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={saving || !newDS.name.trim() || !newDS.url.trim()}
+                className="btn btn-small btn-primary"
+              >
+                {saving ? "..." : "Saqlash"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setShowNew(true)} className="btn btn-outline">
           + Datasource qo'shish
         </button>
-        <button onClick={handleSave} className="btn btn-primary">
-          Saqlash
-        </button>
-        {saved && <span className="saved-msg">Saqlandi!</span>}
-      </div>
+      )}
     </div>
   );
 }
