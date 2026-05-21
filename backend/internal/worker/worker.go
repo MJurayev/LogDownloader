@@ -24,9 +24,9 @@ func New(s *store.Store) *Worker {
 	return &Worker{store: s}
 }
 
-func (w *Worker) StartExport(query, datasourceID, start, end, sortOrder string) string {
+func (w *Worker) StartExport(query, datasourceID, start, end, sortOrder, name string) string {
 	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
-	fileName := fmt.Sprintf("export_%s.log", jobID)
+	fileName := sanitizeFileName(name, jobID)
 
 	dsName := datasourceID
 	if ds := w.store.GetDatasource(datasourceID); ds != nil {
@@ -50,6 +50,32 @@ func (w *Worker) StartExport(query, datasourceID, start, end, sortOrder string) 
 	go w.runExport(job)
 
 	return jobID
+}
+
+// sanitizeFileName foydalanuvchidan kelgan nomni tozalaydi va xavfsiz qiladi:
+// path separator olib tashlanadi, control chars yo'q qilinadi, bo'sh bo'lsa
+// default nom qaytariladi, kerak bo'lsa `.log` qo'shiladi.
+func sanitizeFileName(name, jobID string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Sprintf("export_%s.log", jobID)
+	}
+	// Backslash'larni ham slash bilan birga olib tashlash uchun
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	// Control chars va separatorlarni olib tashlash
+	name = strings.Map(func(r rune) rune {
+		if r < 32 || r == '/' || r == '\\' || r == 127 {
+			return -1
+		}
+		return r
+	}, name)
+	if name == "" || name == "." || name == ".." {
+		return fmt.Sprintf("export_%s.log", jobID)
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".log") {
+		name = name + ".log"
+	}
+	return name
 }
 
 func (w *Worker) runExport(job *model.ExportJob) {

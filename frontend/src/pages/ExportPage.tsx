@@ -22,6 +22,7 @@ export default function ExportPage() {
 
   const [timeStart, setTimeStart] = useState<Date | null>(null);
   const [timeEnd, setTimeEnd] = useState<Date | null>(null);
+  const [fileName, setFileName] = useState("");
 
   useEffect(() => {
     api.getDatasources().then((ds) => {
@@ -48,9 +49,10 @@ export default function ExportPage() {
     setLoading(true);
     setMessage("");
     try {
-      const res = await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), "asc");
+      const res = await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), "asc", fileName);
       setMessage(`Export boshlandi! Job ID: ${res.job_id}`);
       setQuery("");
+      setFileName("");
     } catch {
       setMessage("Xatolik yuz berdi");
     } finally {
@@ -145,6 +147,15 @@ export default function ExportPage() {
           rows={5}
           className="query-input"
         />
+        <div className="form-group">
+          <label className="label">Fayl nomi (ixtiyoriy)</label>
+          <input
+            value={fileName}
+            onChange={(e) => setFileName(e.target.value)}
+            placeholder="Default: export_<job_id>.log"
+            className="input"
+          />
+        </div>
         <button
           onClick={handleExport}
           disabled={loading || !query.trim() || !selectedDS}

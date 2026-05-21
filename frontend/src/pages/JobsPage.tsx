@@ -47,7 +47,7 @@ export default function JobsPage() {
         <div className="card-actions">
           {job.status === "done" && (
             <button
-              onClick={() => api.downloadJob(job.id)}
+              onClick={() => api.downloadJob(job.id, job.file_name)}
               className="btn btn-small btn-primary"
             >
               Yuklab olish
@@ -60,6 +60,9 @@ export default function JobsPage() {
             O'chirish
           </button>
         </div>
+      </div>
+      <div className="job-filename" title="Yuklab olinadigan fayl nomi">
+        {job.file_name}
       </div>
       <code className="query-code">{job.query}</code>
       {(job.start || job.end) && (

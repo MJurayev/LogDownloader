@@ -59,6 +59,9 @@ export default function LogViewerPage() {
   // Sort tartibi (_time bo'yicha). Default: asc — eski loglar yuqorida.
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
+  // Export fayl nomi. Bo'sh bo'lsa default `export_<job_id>.log`.
+  const [exportFileName, setExportFileName] = useState("");
+
   // Edit saved query modal
   const [editingQuery, setEditingQuery] = useState<SavedQuery | null>(null);
   const [editQueryName, setEditQueryName] = useState("");
@@ -383,10 +386,17 @@ export default function LogViewerPage() {
             >
               Save Query
             </button>
+            <input
+              value={exportFileName}
+              onChange={(e) => setExportFileName(e.target.value)}
+              placeholder="Fayl nomi (ixtiyoriy, default: export_<id>.log)"
+              className="input export-filename-input"
+            />
             <button
               onClick={async () => {
                 if (!query.trim() || !selectedDS) return;
-                await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), sortOrder);
+                await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), sortOrder, exportFileName);
+                setExportFileName("");
                 navigate("/jobs");
               }}
               disabled={!query.trim() || !selectedDS}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"logdownloader/internal/model"
@@ -214,6 +215,10 @@ func (s *Store) GetJobs() []*model.ExportJob {
 	for _, j := range s.jobs {
 		result = append(result, j)
 	}
+	// Eng yangi joblar tepada (CreatedAt DESC).
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
 	return result
 }
 

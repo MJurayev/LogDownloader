@@ -159,6 +159,7 @@ export const api = {
     start?: string,
     end?: string,
     sortOrder?: "asc" | "desc",
+    name?: string,
   ): Promise<{ job_id: string }> =>
     authFetch(`${API}/export`, {
       method: "POST",
@@ -168,6 +169,7 @@ export const api = {
         start: start || "",
         end: end || "",
         sort_order: sortOrder || "",
+        name: name || "",
       }),
     }).then((r) => r.json()),
 
@@ -181,7 +183,8 @@ export const api = {
   // to'g'ridan-to'g'ri diskka oqim qiladi. Bu katta exportlarni qo'llab-quvvatlaydi
   // (oldingi blob yondashuvi ~1GB+ da OOM bo'lardi). JWT URL'ga query param sifatida
   // qo'shiladi — backend auth middleware'da /download endpoint'i uchun maxsus qabul.
-  downloadJob: (id: string): void => {
+  // `fileName` server `Content-Disposition`'dan oldin fallback sifatida ishlatiladi.
+  downloadJob: (id: string, fileName?: string): void => {
     const token = getToken();
     if (!token) {
       window.location.href = "/login";
@@ -190,7 +193,7 @@ export const api = {
     const url = `${API}/jobs/${id}/download?token=${encodeURIComponent(token)}`;
     const a = document.createElement("a");
     a.href = url;
-    a.download = `export_${id}.log`;
+    a.download = fileName || `export_${id}.log`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

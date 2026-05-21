@@ -405,6 +405,7 @@ func (h *Handler) startExport(w http.ResponseWriter, r *http.Request) {
 		Start        string `json:"start"`
 		End          string `json:"end"`
 		SortOrder    string `json:"sort_order"`
+		Name         string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -415,7 +416,7 @@ func (h *Handler) startExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID := h.worker.StartExport(req.Query, req.DatasourceID, req.Start, req.End, req.SortOrder)
+	jobID := h.worker.StartExport(req.Query, req.DatasourceID, req.Start, req.End, req.SortOrder, req.Name)
 	writeJSON(w, map[string]string{"job_id": jobID})
 }
 

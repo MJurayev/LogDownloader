@@ -941,6 +941,26 @@
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  align-items: center;
+}
+
+.export-filename-input {
+  flex: 1;
+  min-width: 200px;
+  max-width: 360px;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.job-filename {
+  display: inline-block;
+  color: #93c5fd;
+  font-size: 12px;
+  font-family: "JetBrains Mono", monospace;
+  background: rgba(59, 130, 246, 0.08);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin: 6px 0;
 }
 
 /* Save modal */
