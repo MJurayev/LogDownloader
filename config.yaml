@@ -2,3 +2,7 @@
 host: ""                          # bo'sh = barcha interface'lar (0.0.0.0). Misol: "127.0.0.1" — faqat localhost
 port: "3000"
 data_dir: "/var/lib/logdownloader"
+# Avtomatik bo'laklash: .tar.gz ichidagi bitta .log qismning maksimal xom hajmi (MB).
+# Export shundan katta bo'lsa qator chegarasida <nom>_partNNN.log qismlarga bo'linadi.
+# 0 = bo'laklash o'chiq (bitta fayl). UI'da tanlov yo'q — doim "Avtomatik".
+export_chunk_mb: 100

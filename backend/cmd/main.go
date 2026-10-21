@@ -52,8 +52,13 @@ func main() {
 		log.Println("Created default admin user (admin/admin)")
 	}
 
-	w := worker.New(s)
+	w := worker.New(s, int64(cfg.ExportChunkMB)*1024*1024)
 	h := handler.New(s, w)
+	if cfg.ExportChunkMB > 0 {
+		log.Printf("Export auto-chunking: %d MB per part inside .tar.gz", cfg.ExportChunkMB)
+	} else {
+		log.Println("Export auto-chunking disabled (export_chunk_mb=0)")
+	}
 
 	// Vaqti chiqqan share linklarni davriy ravishda tozalash (har 1 daqiqada).
 	// Ravon (on-access) tekshiruv handler ichida ham bor, lekin foydalanuvchi

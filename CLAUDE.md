@@ -65,8 +65,9 @@ make package-deb
 ## Mustlar / muhim nuktalar
 
 - **UI ikki tilli — uz (lotin, default) va ru.** Barcha ko'rinadigan matn `frontend/src/i18n.tsx` lug'atidan `t("key")` orqali olinadi. Yangi matn qo'shganda **ikkala** lug'atga kiriting (TypeScript `ru` ni `Record<TKey, string>` sifatida majburlaydi). Til `localStorage("lang")` da; sidebar va login sahifasida UZ/RU tugmasi.
-- **Export formati qulflangan: faqat `.tar.gz`.** Log Viewer'da format tanlash elementi yo'q, "Format: Avtomatik (.tar.gz)" ko'rsatkichi bor. Frontend doim `format: "tar.gz"` yuboradi; backend bo'sh/noma'lum formatni ham `tar.gz` deb oladi (`worker.normalizeFormat`). `log` / `log.gz` faqat API orqali aniq so'ralganda ishlaydi — UI'ga format tanlovini qaytarmang.
-- **Export sahifasi yo'q.** Barcha export funksiyasi Log Viewer'da (fayl nomi + Export tugmasi). `/export` route Log Viewer'ga redirect qiladi.
+- **Arxiv formati tanlanadi, default `.tar.gz`** (`.tar.gz` / `.log.gz` / `.log`). Backend bo'sh/noma'lum formatni `tar.gz` deb oladi (`worker.normalizeFormat`).
+- **Bo'laklash qulflangan: faqat "Avtomatik".** Log Viewer'da bo'laklash tanlovi yo'q, "Bo'laklash: Avtomatik" chip'i bor. Server `.tar.gz` ichida xom hajm `export_chunk_mb` (default 100 MB, env `EXPORT_CHUNK_MB`, 0 = o'chiq) dan oshsa qator chegarasida `<nom>_partNNN.log` qismlarga bo'ladi, kichik export bitta `<nom>.log`. `log`/`log.gz` formatlari bitta fayl (bo'laklash faqat arxivda). Chegaralar `worker.partTracker` da streaming paytida aniqlanadi (qayta o'qish yo'q). UI'ga bo'laklash tanlovini qo'shmang.
+- **Export sahifasi yo'q.** Barcha export funksiyasi Log Viewer'da (fayl nomi + format + Export tugmasi). `/export` route Log Viewer'ga redirect qiladi.
 - **Go 1.22+ mux pattern** ishlatiladi (`mux.HandleFunc("POST /api/...", ...)` va `r.PathValue("id")`). Eski `gorilla/mux` qo'shmang.
 - **Auth middleware** `/api/login` va `/api/`'dan tashqari hamma route'ni bypass qiladi — ya'ni static fayllar va `/dl/{token}` middleware'siz beriladi. Yangi public endpoint qo'shsangiz, [auth.go](backend/internal/auth/auth.go) dagi `Middleware` boshini yangilang. Middleware token'dagi `user_id` bo'yicha userni **store'dan** o'qiydi: o'chirilgan user tokeni 401, rol o'zgarishi keyingi so'rovdan kuchga kiradi.
 - **Store nusxa qaytaradi.** `GetSettings`/`GetDatasource`/`GetJob`/`GetJobsForUser` chuqur nusxa beradi — handler ularni mutex'siz o'zgartirib `Save*` ga qaytarishi mumkin. Store'ning ichki slice/map'iga pointer qaytaruvchi metod qo'shmang (bu avval real data race edi).
@@ -93,7 +94,7 @@ make package-deb
 
 ## Test
 
-Unit test yo'q. `scripts/smoke/smoke.py` — binary + mock VictoriaLogs bilan end-to-end tekshiruv (auth, parol strip, export tar.gz, ownership, share, cancel, JWT, restart recovery). Backend xatti-harakatini o'zgartirsangiz shu testni yangilab ishga tushiring; race detector build bilan ham o'tishi kerak. Yangi Go unit test qo'shganda `internal/.../*_test.go` joylash kerak.
+Unit test yo'q. `scripts/smoke/smoke.py` — binary + mock VictoriaLogs bilan end-to-end tekshiruv (auth, parol strip, export tar.gz, avtomatik bo'laklash `EXPORT_CHUNK_MB=1` bilan, ownership, share, cancel, JWT, restart recovery). Backend xatti-harakatini o'zgartirsangiz shu testni yangilab ishga tushiring; race detector build bilan ham o'tishi kerak. Yangi Go unit test qo'shganda `internal/.../*_test.go` joylash kerak.
 
 ## Memory file references
 

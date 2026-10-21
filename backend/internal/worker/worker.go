@@ -22,7 +22,7 @@ import (
 )
 
 // Supported export formats. Noma'lum yoki bo'sh qiymat FormatTarGz'ga
-// normalizatsiya qilinadi (UI'da ham format qulflangan: faqat .tar.gz).
+// normalizatsiya qilinadi (UI default'i ham .tar.gz).
 const (
 	FormatLog   = "log"
 	FormatLogGz = "log.gz"
@@ -43,13 +43,62 @@ type ExportParams struct {
 }
 
 type Worker struct {
-	store   *store.Store
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc // jobID -> running export'ni to'xtatish
+	store *store.Store
+	// chunkBytes — avtomatik bo'laklash: .tar.gz ichidagi bitta .log qismning
+	// maksimal xom hajmi. 0 = bo'laklash yo'q. UI'da tanlov yo'q ("Avtomatik"),
+	// qiymat config `export_chunk_mb` dan keladi.
+	chunkBytes int64
+	mu         sync.Mutex
+	cancels    map[string]context.CancelFunc // jobID -> running export'ni to'xtatish
 }
 
-func New(s *store.Store) *Worker {
-	return &Worker{store: s, cancels: make(map[string]context.CancelFunc)}
+func New(s *store.Store, chunkBytes int64) *Worker {
+	if chunkBytes < 0 {
+		chunkBytes = 0
+	}
+	return &Worker{store: s, chunkBytes: chunkBytes, cancels: make(map[string]context.CancelFunc)}
+}
+
+// partTracker qism chegaralarini qator chegarasida aniqlaydi. streamLines har
+// Write chaqiruvida aynan bitta qator yozadi, shu sababli faylni qayta o'qimasdan
+// "joriy qism + shu qator > limit" qoidasi bilan chegara qo'yish mumkin. Bitta
+// qator limitdan katta bo'lsa o'zi alohida qism bo'ladi (bo'sh qism yaratilmaydi).
+type partTracker struct {
+	w        io.Writer
+	limit    int64
+	offset   int64   // jami yozilgan baytlar (mantiqiy, bufio'dan oldin)
+	partSize int64   // joriy qismdagi baytlar
+	bounds   []int64 // har qismning boshlanish offseti; birinchi doim 0
+}
+
+func newPartTracker(w io.Writer, limit int64) *partTracker {
+	return &partTracker{w: w, limit: limit, bounds: []int64{0}}
+}
+
+func (p *partTracker) Write(b []byte) (int, error) {
+	if p.limit > 0 && p.partSize > 0 && p.partSize+int64(len(b)) > p.limit {
+		p.bounds = append(p.bounds, p.offset)
+		p.partSize = 0
+	}
+	n, err := p.w.Write(b)
+	p.offset += int64(n)
+	p.partSize += int64(n)
+	return n, err
+}
+
+// parts — [start, end) juftliklar. Bo'sh export → bitta bo'sh qism.
+func (p *partTracker) parts() [][2]int64 {
+	res := make([][2]int64, 0, len(p.bounds))
+	for i, start := range p.bounds {
+		end := p.offset
+		if i+1 < len(p.bounds) {
+			end = p.bounds[i+1]
+		}
+		if end > start || len(res) == 0 && i == len(p.bounds)-1 {
+			res = append(res, [2]int64{start, end})
+		}
+	}
+	return res
 }
 
 func (w *Worker) StartExport(p ExportParams) string {
@@ -254,7 +303,7 @@ func (w *Worker) writeRaw(job *model.ExportJob, body io.Reader, outPath string) 
 		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("flush error: %v", err), lines)
 		return
 	}
-	w.store.UpdateJobSize(job.ID, counter.n)
+	w.store.UpdateJobResult(job.ID, counter.n, 1)
 	w.store.UpdateJobStatus(job.ID, model.JobDone, "", lines)
 }
 
@@ -283,13 +332,15 @@ func (w *Worker) writeLogGz(job *model.ExportJob, body io.Reader, outPath string
 		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("flush error: %v", err), lines)
 		return
 	}
-	w.store.UpdateJobSize(job.ID, counter.n)
+	w.store.UpdateJobResult(job.ID, counter.n, 1)
 	w.store.UpdateJobStatus(job.ID, model.JobDone, "", lines)
 }
 
 // writeTarGz — ikki fazada: oldin xom NDJSON ni .tmp faylga oqim qilamiz (tar
-// header'i fayl o'lchamini bilishi kerak), keyin .tar.gz quramiz va .tmp ni
-// o'chiramiz.
+// header'i har qism o'lchamini bilishi kerak), keyin .tar.gz quramiz va .tmp ni
+// o'chiramiz. Avtomatik bo'laklash: xom hajm chunkBytes dan oshsa arxiv ichida
+// `<nom>_part001.log`, `_part002.log`, ... (qator chegarasida); aks holda bitta
+// `<nom>.log`.
 func (w *Worker) writeTarGz(job *model.ExportJob, body io.Reader, outPath string) {
 	tempPath := outPath + ".tmp"
 	tempF, err := os.Create(tempPath)
@@ -301,7 +352,8 @@ func (w *Worker) writeTarGz(job *model.ExportJob, body io.Reader, outPath string
 
 	rawCounter := &countingWriter{w: tempF}
 	bufW := bufio.NewWriter(rawCounter)
-	lines := w.streamLines(job, body, bufW)
+	tracker := newPartTracker(bufW, w.chunkBytes)
+	lines := w.streamLines(job, body, tracker)
 	if lines < 0 {
 		tempF.Close()
 		return
@@ -325,28 +377,31 @@ func (w *Worker) writeTarGz(job *model.ExportJob, body io.Reader, outPath string
 	gz := gzip.NewWriter(finalCounter)
 	tw := tar.NewWriter(gz)
 
-	innerName := strings.TrimSuffix(filepath.Base(outPath), ".tar.gz") + ".log"
-	if err := tw.WriteHeader(&tar.Header{
-		Name:    innerName,
-		Mode:    0644,
-		Size:    rawCounter.n,
-		ModTime: time.Now(),
-	}); err != nil {
-		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("tar header failed: %v", err), lines)
-		return
-	}
-
 	src, err := os.Open(tempPath)
 	if err != nil {
 		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("tar open temp failed: %v", err), lines)
 		return
 	}
-	if _, err := io.Copy(tw, src); err != nil {
-		src.Close()
-		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("tar copy failed: %v", err), lines)
-		return
+	defer src.Close()
+
+	parts := tracker.parts()
+	base := strings.TrimSuffix(filepath.Base(outPath), ".tar.gz")
+	now := time.Now()
+	for i, pr := range parts {
+		name := base + ".log"
+		if len(parts) > 1 {
+			name = fmt.Sprintf("%s_part%03d.log", base, i+1)
+		}
+		size := pr[1] - pr[0]
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0644, Size: size, ModTime: now}); err != nil {
+			w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("tar header failed: %v", err), lines)
+			return
+		}
+		if _, err := io.Copy(tw, io.NewSectionReader(src, pr[0], size)); err != nil {
+			w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("tar copy failed (part %d): %v", i+1, err), lines)
+			return
+		}
 	}
-	src.Close()
 
 	if err := tw.Close(); err != nil {
 		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("tar close failed: %v", err), lines)
@@ -357,7 +412,7 @@ func (w *Worker) writeTarGz(job *model.ExportJob, body io.Reader, outPath string
 		return
 	}
 
-	w.store.UpdateJobSize(job.ID, finalCounter.n)
+	w.store.UpdateJobResult(job.ID, finalCounter.n, len(parts))
 	w.store.UpdateJobStatus(job.ID, model.JobDone, "", lines)
 }
 

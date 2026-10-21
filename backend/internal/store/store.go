@@ -346,13 +346,14 @@ func (s *Store) UpdateJobStatus(id string, status model.JobStatus, errMsg string
 	}
 }
 
-// UpdateJobSize diskka yozmaydi — har doim undan keyin keladigan yakuniy
-// UpdateJobStatus(done) persist qiladi.
-func (s *Store) UpdateJobSize(id string, size int64) {
+// UpdateJobResult yakuniy fayl hajmi va qismlar sonini yozadi. Diskka
+// yozmaydi — har doim undan keyin keladigan UpdateJobStatus(done) persist qiladi.
+func (s *Store) UpdateJobResult(id string, size int64, parts int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if job, ok := s.jobs[id]; ok {
 		job.Size = size
+		job.Parts = parts
 	}
 }
 
@@ -436,10 +437,11 @@ func (s *Store) DeleteShare(token string) error {
 
 // ConsumeShare atomik tarzda: tekshiradi → countni oshiradi → agar limitga
 // yetgan bo'lsa share, job va faylni o'chiradi. Qaytaradi:
-//   share — ishlatilayotgan share nusxasi (mavjud bo'lsa)
-//   filePath — yuklab olish uchun fayl yo'li (mavjud bo'lsa)
-//   exhaustedAfter — true bo'lsa fayl serve qilingandan keyin tozalanishi kerak
-//   err — invalidlanish sababi ("not found", "expired", "exhausted")
+//
+//	share — ishlatilayotgan share nusxasi (mavjud bo'lsa)
+//	filePath — yuklab olish uchun fayl yo'li (mavjud bo'lsa)
+//	exhaustedAfter — true bo'lsa fayl serve qilingandan keyin tozalanishi kerak
+//	err — invalidlanish sababi ("not found", "expired", "exhausted")
 func (s *Store) ConsumeShare(token string) (share *model.ShareLink, filePath string, exhaustedAfter bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

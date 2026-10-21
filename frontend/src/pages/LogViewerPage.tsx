@@ -2,14 +2,15 @@ import { Fragment, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { api, type SavedQuery, type Datasource } from "../api";
+import { api, type SavedQuery, type Datasource, type ExportFormat } from "../api";
 import { useT } from "../i18n";
 import "./Pages.css";
 
 const PAGE_SIZE = 50;
 
-// Export formati qulflangan: har doim .tar.gz ("Avtomatik"). Tanlash imkoni yo'q.
-const EXPORT_FORMAT = "tar.gz" as const;
+// Arxiv formati tanlanadi, default .tar.gz. Bo'laklash esa tanlanmaydi — doim
+// "Avtomatik" (server .tar.gz ichida qismlarga bo'ladi, config export_chunk_mb).
+const DEFAULT_EXPORT_FORMAT: ExportFormat = "tar.gz";
 
 // Brauzer TZ qisqartmasi (masalan: "GMT+05:00")
 const browserTZ = (() => {
@@ -64,8 +65,9 @@ export default function LogViewerPage() {
   // Sort tartibi (_time bo'yicha). Default: asc — eski loglar yuqorida.
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
-  // Export fayl nomi. Bo'sh bo'lsa server default `export_<vaqt>.tar.gz` beradi.
+  // Export fayl nomi. Bo'sh bo'lsa server default `export_<vaqt>.<format>` beradi.
   const [exportFileName, setExportFileName] = useState("");
+  const [exportFormat, setExportFormat] = useState<ExportFormat>(DEFAULT_EXPORT_FORMAT);
   const [exporting, setExporting] = useState(false);
 
   // Edit saved query modal
@@ -203,7 +205,7 @@ export default function LogViewerPage() {
     if (!query.trim() || !selectedDS || exporting) return;
     setExporting(true);
     try {
-      await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), sortOrder, exportFileName, EXPORT_FORMAT);
+      await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), sortOrder, exportFileName, exportFormat);
       setExportFileName("");
       navigate("/jobs");
     } catch {
@@ -386,8 +388,21 @@ export default function LogViewerPage() {
               placeholder={t("fileNamePlaceholder")}
               className="input export-filename-input"
             />
-            <span className="export-format-locked" title={t("exportFormatLockedTitle")}>
-              {t("exportFormatLocked")}
+            <select
+              value={exportFormat}
+              onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
+              className="input export-format-select"
+              title={t("formatSelectTitle")}
+            >
+              <option value="tar.gz">.tar.gz</option>
+              <option value="log.gz">.log.gz</option>
+              <option value="log">{t("formatRaw")}</option>
+            </select>
+            <span
+              className={`export-locked-chip ${exportFormat === "tar.gz" ? "" : "muted"}`}
+              title={exportFormat === "tar.gz" ? t("chunkAutoTitle") : t("chunkOnlyTarTitle")}
+            >
+              {t("chunkAuto")}
             </span>
             <button
               onClick={handleExport}

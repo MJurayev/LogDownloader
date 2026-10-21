@@ -110,12 +110,12 @@ Server VictoriaLogs `/select/logsql/query`'dan `limit+offset` qator oladi, NDJSO
 // 200
 { "job_id": "job_1714000000000000000" }
 ```
-`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. `format`: `"tar.gz"` (default — **bo'sh yoki noma'lum qiymat ham `tar.gz`**), `"log"`, `"log.gz"` faqat API orqali aniq so'ralganda. UI doim `tar.gz` yuboradi. `datasource_id` mavjud bo'lmasa 404. Job egasi = joriy user (`owner_id`, `owner_name`).
+`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. `format`: `"tar.gz"` (default — **bo'sh yoki noma'lum qiymat ham `tar.gz`**), `"log.gz"`, `"log"`. UI'da tanlanadi (default `tar.gz`). **Bo'laklash parametri yo'q** — doim avtomatik (server config `export_chunk_mb`). `datasource_id` mavjud bo'lmasa 404. Job egasi = joriy user (`owner_id`, `owner_name`).
 
 `name` — fayl nomi (ixtiyoriy): bo'sh bo'lsa `export` prefix. Server `sanitizeFileName` orqali tozalaydi va doim oxiriga UTC timestamp + format suffix qo'shadi. Misol: `my-prod-logs` → `my-prod-logs_20260521-090655-123.tar.gz`.
 
 **Format implementatsiyasi (worker.go):**
-- `tar.gz` — ikki bosqich: oldin xom faylni `.tmp`'ga yozadi (tar header'i size talab qiladi), keyin `.tar.gz` quradi (ichida `<nom>.log`) va `.tmp`'ni o'chiradi
+- `tar.gz` — ikki bosqich: oldin xom faylni `.tmp`'ga yozadi (tar header'i size talab qiladi), keyin `.tar.gz` quradi va `.tmp`'ni o'chiradi. **Avtomatik bo'laklash:** `partTracker` streaming paytida qator chegarasida qism chegaralarini belgilaydi (xom hajm `export_chunk_mb` × 1 MiB dan oshganda); natija ≥2 qism bo'lsa arxiv ichida `<nom>_part001.log`, `_part002.log`, …, aks holda bitta `<nom>.log`. `parts` job maydonida. Bitta qator limitdan katta bo'lsa o'zi alohida qism.
 - `log.gz` — `bufio.Writer` → `gzip.Writer` → fayl, streaming
 - `log` — `bufio.Writer` → fayl, streaming
 
@@ -140,7 +140,8 @@ Streaming `vlclient.DoLongRunning(ctx, ...)` orqali; job o'chirilsa ctx bekor qi
     "lines": 12345,
     "start": "...", "end": "...", "sort_order": "asc",
     "format": "tar.gz",
-    "size": 1048576
+    "size": 1048576,
+    "parts": 3
   }
 ]
 ```

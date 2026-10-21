@@ -62,6 +62,7 @@ export interface ExportJob {
   end?: string;
   format?: ExportFormat;
   size: number;
+  parts?: number; // .tar.gz ichidagi qismlar soni (avtomatik bo'laklash); 1 yoki yo'q = bitta fayl
 }
 
 export interface QueryResult {

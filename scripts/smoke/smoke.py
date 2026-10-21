@@ -11,6 +11,7 @@ Env:
     SMOKE_PORT         — server porti (default 13000), SMOKE_VL_PORT — mock VictoriaLogs porti (19428)
 
 Tekshiradi: datasource parolining API'da qaytmasligi, format default .tar.gz,
+avtomatik bo'laklash (EXPORT_CHUNK_MB=1 bilan ko'p qismli arxiv, qator chegarasi),
 job ownership (user/admin), jobs.json persist, share link (Range yo'q, limit),
 running job'ni o'chirganda cancel, JWT (o'chirilgan user / rol o'zgarishi),
 restart recovery (uzilgan job failed, orphan fayl o'chadi).
@@ -26,6 +27,8 @@ BIN = os.environ.get("LOGDOWNLOADER_BIN", os.path.join(ROOT, "build", "logdownlo
 DATA = os.environ.get("SMOKE_DATA_DIR") or tempfile.mkdtemp(prefix="logdownloader-smoke-")
 PORT = int(os.environ.get("SMOKE_PORT", "13000"))
 VL_PORT = int(os.environ.get("SMOKE_VL_PORT", "19428"))
+VL_BIG_PORT = VL_PORT + 1  # bo'laklash testi uchun tez, katta mock
+BIG_LINES = 30000           # ~3 MB xom → EXPORT_CHUNK_MB=1 bilan 3–4 qism
 BASE = f"http://127.0.0.1:{PORT}"
 failures = []
 
@@ -54,7 +57,7 @@ def req(method, path, body=None, token=None, raw=False):
 
 
 def start_server():
-    env = dict(os.environ, DATA_DIR=DATA, PORT=str(PORT), HOST="127.0.0.1")
+    env = dict(os.environ, DATA_DIR=DATA, PORT=str(PORT), HOST="127.0.0.1", EXPORT_CHUNK_MB="1")
     env.pop("CONFIG_PATH", None)
     p = subprocess.Popen([BIN], cwd=DATA, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for _ in range(50):
@@ -95,6 +98,7 @@ if not os.path.exists(BIN):
 shutil.rmtree(DATA, ignore_errors=True)
 os.makedirs(DATA, exist_ok=True)
 mock = subprocess.Popen([sys.executable, "-I", os.path.join(HERE, "mock_vl.py"), str(VL_PORT)])
+mock_big = subprocess.Popen([sys.executable, "-I", os.path.join(HERE, "mock_vl.py"), str(VL_BIG_PORT), str(BIG_LINES), "0"])
 time.sleep(0.5)
 srv = start_server()
 out = ""
@@ -139,8 +143,40 @@ try:
         names = tf.getnames()
         n_lines = sum(1 for _ in tf.extractfile(names[0]))
     check(n_lines == 3000 and job["lines"] == 3000, f"tar.gz contains {n_lines} lines, job.lines={job['lines']}")
+    check(len(names) == 1 and not names[0].endswith("_part001.log") and job.get("parts", 1) == 1, f"small export: single inner file {names}")
     jobs_json = json.load(open(os.path.join(DATA, "jobs.json")))
     check(job_id in jobs_json and jobs_json[job_id]["status"] == "done", "jobs.json persisted with done status")
+
+    print("== Auto-chunking (EXPORT_CHUNK_MB=1, ~3 MB export)")
+    st, ds_big, _ = req("POST", "/api/datasources", {"name": "big", "url": f"http://127.0.0.1:{VL_BIG_PORT}", "global": True}, admin)
+    st, body, _ = req("POST", "/api/export", {"query": "*", "datasource_id": ds_big["id"], "name": "big", "format": "tar.gz"}, admin)
+    big = wait_job(admin, body["job_id"], timeout=120)
+    check(big is not None and big["status"] == "done", f"big export done: {big and big.get('error')}")
+    bpath = os.path.join(DATA, "exports", big["file_name"])
+    limit = 1024 * 1024
+    with tarfile.open(bpath) as tf:
+        members = tf.getmembers()
+        pnames = [m.name for m in members]
+        sizes = [m.size for m in members]
+        total_lines = 0
+        boundary_ok = True
+        for m in members:
+            data = tf.extractfile(m).read()
+            total_lines += data.count(b"\n")
+            if not data.endswith(b"\n"):
+                boundary_ok = False
+    check(len(members) >= 3 and big.get("parts") == len(members), f"archive split into {len(members)} parts, job.parts={big.get('parts')}")
+    check(all(n.endswith("_part%03d.log" % (i + 1)) for i, n in enumerate(pnames)), f"part names sequential: {pnames[:2]}…")
+    check(all(s <= limit for s in sizes) and all(s > 0 for s in sizes), f"each part <= 1 MB and non-empty: {sizes}")
+    check(boundary_ok and total_lines == BIG_LINES and big["lines"] == BIG_LINES, f"parts cut on line boundary, total {total_lines} lines")
+    st, _, _ = req("DELETE", f"/api/jobs/{big['id']}", token=admin)
+    st, _, _ = req("DELETE", f"/api/datasources/{ds_big['id']}", token=admin)
+
+    # Bo'laklash faqat tar.gz'da: log.gz bitta fayl, parts=1
+    st, body, _ = req("POST", "/api/export", {"query": "*", "datasource_id": ds_id, "name": "plain", "format": "log.gz"}, admin)
+    plain = wait_job(admin, body["job_id"])
+    check(plain is not None and plain["status"] == "done" and plain["file_name"].endswith(".log.gz") and plain.get("parts") == 1, f"log.gz export single file, parts=1: {plain and plain['file_name']}")
+    st, _, _ = req("DELETE", f"/api/jobs/{plain['id']}", token=admin)
 
     st, bob_jobs, _ = req("GET", "/api/jobs", token=bob)
     check(not bob_jobs, "bob sees no admin jobs")
@@ -212,6 +248,7 @@ try:
 finally:
     out += stop_server(srv)
     mock.kill()
+    mock_big.kill()
     print("---- server log tail ----")
     print("\n".join(out.strip().splitlines()[-8:]))
     if "DATA RACE" in out:

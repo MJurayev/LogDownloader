@@ -1,6 +1,6 @@
 # LogDownloader
 
-VictoriaLogs uchun web-based log query va export vositasi. LogsQL queryni brauzerda yozasiz, natijani jadval ko'rinishida ko'rasiz va `.tar.gz` arxiv sifatida eksport qilib yuklab olasiz.
+VictoriaLogs uchun web-based log query va export vositasi. LogsQL queryni brauzerda yozasiz, natijani jadval ko'rinishida ko'rasiz va arxiv (default `.tar.gz`, avtomatik qismlarga bo'lingan) sifatida eksport qilib yuklab olasiz.
 
 Backend Go bilan yozilgan single static binary (React frontend `embed.FS` orqali shu binarni ichiga joylanadi). Front-end React 19 + TypeScript + Vite, interfeys ikki tilda (o'zbek / rus). Storage — disk ustida oddiy JSON fayllar (database yo'q).
 
@@ -8,8 +8,8 @@ Backend Go bilan yozilgan single static binary (React frontend `embed.FS` orqali
 
 ## Asosiy imkoniyatlar
 
-- **Log Viewer** — LogsQL query yozish, natijani jadval ko'rinishida ko'rish (pagination, level highlight, qatorni JSON detail bilan ochish, vaqt oralig'i, `_time` bo'yicha saralash). Export ham shu sahifadan: fayl nomi (ixtiyoriy) + Export tugmasi.
-- **Export** — query'ni background worker'ga jo'natadi; worker VictoriaLogs'dan stream qilib oladi va **doim `.tar.gz`** (ichida `.log` NDJSON) yaratadi. Format tanlanmaydi — "Avtomatik".
+- **Log Viewer** — LogsQL query yozish, natijani jadval ko'rinishida ko'rish (pagination, level highlight, qatorni JSON detail bilan ochish, vaqt oralig'i, `_time` bo'yicha saralash). Export ham shu sahifadan: fayl nomi (ixtiyoriy) + arxiv formati + Export tugmasi.
+- **Export** — query'ni background worker'ga jo'natadi; worker VictoriaLogs'dan stream qilib oladi. Format: **`.tar.gz` (default)**, `.log.gz` yoki `.log`. **Bo'laklash — faqat "Avtomatik"** (tanlov yo'q): `.tar.gz` ichida xom hajm `export_chunk_mb` (default 100 MB) dan oshsa qator chegarasida `<nom>_part001.log`, `_part002.log`, … qismlar; kichik export bitta `<nom>.log`.
 - **Jobs** — running / done / failed exportlar; diskda saqlanadi (restart'dan keyin ham ko'rinadi); "Yuklab olish" tugmasi, qator soni, hajm, xato matni. Oddiy user faqat o'z joblarini ko'radi, admin hammasini. Running job o'chirilsa export to'xtatiladi.
 - **Share link** — tayyor export uchun auth'siz ommaviy URL (`/dl/{token}`), yuklab olishlar limiti va muddati bilan; limit/muddat tugaganda fayl o'chadi.
 - **Saved Queries** — tez-tez ishlatadigan querylarni nomi bilan saqlash. Admin "Global" deb belgilab hammaga ko'rinadigan qilishi mumkin.
@@ -66,8 +66,8 @@ Backend Go bilan yozilgan single static binary (React frontend `embed.FS` orqali
 | [frontend/src/api.ts](frontend/src/api.ts) | Bitta `api` object — barcha endpoint chaqiruvlari, 401'da localStorage tozalanib `/login` ga redirect. |
 | [frontend/src/components/Layout.tsx](frontend/src/components/Layout.tsx) | Sidebar nav + UZ/RU + theme toggle + outlet. |
 | [frontend/src/pages/LoginPage.tsx](frontend/src/pages/LoginPage.tsx) | Username/password form, til almashtirgich. |
-| [frontend/src/pages/LogViewerPage.tsx](frontend/src/pages/LogViewerPage.tsx) | Asosiy sahifa: datasource selector + vaqt oralig'i + LogsQL textarea + Search/Save/Export (`.tar.gz` qulflangan) + jadval + saved queries panel. |
-| [frontend/src/pages/JobsPage.tsx](frontend/src/pages/JobsPage.tsx) | Jobs ro'yxati; har 2s da auto-refresh; share modal; egasi chip'i (admin uchun). |
+| [frontend/src/pages/LogViewerPage.tsx](frontend/src/pages/LogViewerPage.tsx) | Asosiy sahifa: datasource selector + vaqt oralig'i + LogsQL textarea + Search/Save/Export (format default `.tar.gz`, bo'laklash "Avtomatik" chip) + jadval + saved queries panel. |
+| [frontend/src/pages/JobsPage.tsx](frontend/src/pages/JobsPage.tsx) | Jobs ro'yxati; har 2s da auto-refresh; share modal; egasi chip'i (admin uchun); qismlar soni chip'i. |
 | [frontend/src/pages/SettingsPage.tsx](frontend/src/pages/SettingsPage.tsx) | Datasource'larni qo'shish/tahrirlash/o'chirish. |
 | [frontend/src/pages/UsersPage.tsx](frontend/src/pages/UsersPage.tsx) | Admin uchun foydalanuvchilarni boshqarish. |
 
@@ -78,6 +78,7 @@ host: ""
 port: "3000"
 data_dir: "/var/lib/logdownloader"
 jwt_secret: "<hex-string>"   # ixtiyoriy — bo'sh bo'lsa data_dir/jwt_secret faylidan auto-load qilinadi
+export_chunk_mb: 100         # avtomatik bo'laklash: .tar.gz ichidagi bitta .log qism (MB); 0 = o'chiq
 ```
 
 ---
@@ -99,7 +100,7 @@ Hammasi `Authorization: Bearer <jwt>` talab qiladi, faqat `POST /api/login` va `
 | PUT | `/api/queries/{id}` | owner/admin | Tahrirlash |
 | DELETE | `/api/queries/{id}` | owner/admin | O'chirish |
 | GET | `/api/query?query=&datasource_id=&limit=&offset=&start=&end=&sort=` | auth | VictoriaLogs'ga proxy + paginate |
-| POST | `/api/export` | auth | Background job (egasi = joriy user; format default `tar.gz`) |
+| POST | `/api/export` | auth | Background job (egasi = joriy user; format default `tar.gz`; bo'laklash avtomatik) |
 | GET | `/api/jobs` | auth | O'z joblari (admin: hammasi), yangi tepada |
 | DELETE | `/api/jobs/{id}` | owner/admin | Job + fayl o'chadi, running bo'lsa to'xtatiladi |
 | GET | `/api/jobs/{id}/download` | owner/admin | `.tar.gz` faylni qaytaradi (done bo'lsa); `?token=` ham qabul qilinadi |
@@ -123,9 +124,10 @@ YAML qidirish tartibi:
 host: ""
 port: "3000"
 data_dir: "/var/lib/logdownloader"
+export_chunk_mb: 100
 ```
 
-Env: `HOST`, `PORT`, `DATA_DIR`, `JWT_SECRET`. **systemd service env bermaydi** — shuning uchun `/etc/logdownloader/config.yaml` dagi qiymatlar ishlaydi.
+Env: `HOST`, `PORT`, `DATA_DIR`, `JWT_SECRET`, `EXPORT_CHUNK_MB`. **systemd service env bermaydi** — shuning uchun `/etc/logdownloader/config.yaml` dagi qiymatlar ishlaydi.
 
 `DataDir` ichida `settings.json`, `users.json`, `queries.json`, `jobs.json`, `shares.json`, `jwt_secret`, `exports/` yaratiladi.
 
@@ -204,7 +206,7 @@ git push origin v0.1.0
 - Datasource basic auth paroli storage'da plain JSON sifatida saqlanadi (`settings.json`), lekin API orqali qaytarilmaydi. Disk shifrlanmagan bo'lsa, ehtiyot bo'lish kerak.
 - `/api/jobs/{id}/download?token=` — JWT URL'da, reverse-proxy access logiga tushishi mumkin (self-hosted ichki vosita uchun qabul qilingan).
 - `/api/query`'da `limit + offset` orqali server haqiqiy data'ni shu miqdorda fetch qiladi va shundan keyin in-memory slice qiladi — katta offset'larda VictoriaLogs'ga og'irlik tushadi.
-- Export job worker concurrency limiti yo'q — har export alohida goroutine, ko'p parallel export RAM/network'ni egallaydi. `.tar.gz` ikki bosqichli (avval `.tmp`), vaqtincha 2× disk joy kerak.
+- Export job worker concurrency limiti yo'q — har export alohida goroutine, ko'p parallel export RAM/network'ni egallaydi. `.tar.gz` ikki bosqichli (avval `.tmp`, qism chegaralari streaming paytida aniqlanadi), vaqtincha 2× disk joy kerak.
 
 Batafsil texnik kontekst uchun `.memory/`:
 - [.memory/api-reference.md](.memory/api-reference.md) — barcha endpointlar request/response bilan

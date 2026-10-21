@@ -157,6 +157,9 @@ export default function JobsPage() {
           {job.format && job.format !== "log" && (
             <span className="job-format-chip">{job.format}</span>
           )}
+          {(job.parts ?? 0) > 1 && (
+            <span className="job-parts-chip" title={t("chunkAuto")}>{t("partsCount", { n: job.parts! })}</span>
+          )}
         </div>
         <div className="card-actions">
           {job.status === "done" && (

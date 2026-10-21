@@ -952,8 +952,15 @@
   padding: 6px 10px;
 }
 
-/* Export formati qulflangan (.tar.gz) — tanlash elementi emas, faqat ko'rsatkich */
-.export-format-locked {
+.export-format-select {
+  width: auto;
+  font-size: 12px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+}
+
+/* Bo'laklash qulflangan ("Avtomatik") — tanlash elementi emas, faqat ko'rsatkich */
+.export-locked-chip {
   font-size: 12px;
   font-weight: 600;
   padding: 6px 10px;
@@ -964,6 +971,21 @@
   flex-shrink: 0;
   cursor: default;
   user-select: none;
+}
+
+.export-locked-chip.muted {
+  background: var(--bg-hover);
+  color: var(--text-placeholder);
+}
+
+.job-parts-chip {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  white-space: nowrap;
 }
 
 .job-owner {

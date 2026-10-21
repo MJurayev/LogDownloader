@@ -70,6 +70,9 @@ type ExportJob struct {
 	Format string `json:"format,omitempty"`
 	// Size — diskdagi yakuniy fayl hajmi (baytlar).
 	Size int64 `json:"size"`
+	// Parts — .tar.gz ichidagi .log qismlar soni (avtomatik bo'laklash).
+	// log / log.gz formatlarida doim 1.
+	Parts int `json:"parts,omitempty"`
 }
 
 // ShareLink — export faylga ommaviy URL beradi (auth talab qilmaydi).

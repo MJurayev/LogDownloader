@@ -13,7 +13,7 @@ Storage — disk ustida JSON fayllar. Library yo'q, faqat `encoding/json` + `os.
 ├── shares.json             # map[token]ShareLink
 ├── jwt_secret              # 32 bayt hex, 0600 (auto-generate)
 └── exports/
-    └── <nom>_<UTC ts>.tar.gz   # VictoriaLogs'dan stream qilingan NDJSON, tar+gzip
+    └── <nom>_<UTC ts>.tar.gz   # ichida <nom>.log yoki <nom>_partNNN.log qismlar (avtomatik bo'laklash)
 ```
 
 Eslatma: `settings.json` array shape'da (Settings struct ichida slice), qolganlari map shape'da. Bu nomuvofiqlik tarixiy.
@@ -77,6 +77,7 @@ type ExportJob struct {
     SortOrder      string
     Format         string     // "tar.gz" (default) | "log.gz" | "log" — StartExport'da normalizatsiya
     Size           int64      // yakuniy fayl hajmi
+    Parts          int        // .tar.gz ichidagi qismlar soni (omitempty); log/log.gz = 1
 }
 ```
 
@@ -105,6 +106,7 @@ type ShareLink struct {
 - **`RecoverJobs()` (startup, main.go):** running qolgan joblar → failed (`"server qayta ishga tushdi, export uzildi"`), ularning fayli + `.tmp` o'chadi; `exports/` dagi hech qaysi jobga tegishli bo'lmagan fayllar (orphan) o'chadi; job'i yo'q yoki done bo'lmagan share'lar o'chadi.
 - **Worker HTTP — timeout'siz, lekin context bilan.** `vlclient.DoLongRunning(ctx, ...)` dedicated `http.Client{Timeout: 0}`; dial/TLS 30s. `worker.Cancel(jobID)` ctx'ni bekor qiladi — `DeleteJob` oldidan handler chaqiradi; worker chiqishda ctx bekor bo'lgan bo'lsa chala faylni o'chiradi.
 - **Store `saveFile` xatosi in-memory holatni qaytarmaydi** (atomar emas) — ma'lum trade-off.
+- **Avtomatik bo'laklash faqat `tar.gz`'da.** `worker.chunkBytes` (config `export_chunk_mb`, 0 = o'chiq). `UpdateJobResult(id, size, parts)` yakunda; `Parts` persist `done` yozuvi bilan.
 
 ## Migration / backward compat
 

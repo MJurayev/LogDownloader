@@ -45,10 +45,10 @@ Eng katta sahifa. Ikki ustun: chap saved queries paneli, o'ng asosiy viewer.
 - Search → `api.queryLogs(query, dsId, 50, page*50, start, end, sort)`. Natija jadval, `_time/_msg/level/service/host` priority sortda chiqadi, qolgan har bir key qo'shimcha ustun. `_time` ustuni sort tugmasi.
 - Qator bosilsa `expandedRow` orqali JSON detail ochiladi. Qatorlar `<Fragment key={i}>` ichida (ikki `<tr>`), key warning yo'q.
 - "Save Query" modal — global checkbox faqat admin'da ko'rinadi. Saved query edit modal.
-- **Export:** fayl nomi input + qulflangan "Format: Avtomatik (.tar.gz)" chip + Export tugmasi. `EXPORT_FORMAT = "tar.gz"` konstantasi, tanlash elementi yo'q. `api.startExport(...)` → `/jobs`'ga navigate. Xato bo'lsa `error-banner`.
+- **Export:** fayl nomi input + arxiv formati `<select>` (default `.tar.gz`, `DEFAULT_EXPORT_FORMAT`) + qulflangan "Bo'laklash: Avtomatik" chip (`.export-locked-chip`; format `.tar.gz` bo'lmasa `.muted` + tooltip "faqat .tar.gz") + Export tugmasi. Bo'laklash tanlovi yo'q — server hal qiladi. `api.startExport(...)` → `/jobs`'ga navigate. Xato bo'lsa `error-banner`.
 
 ### JobsPage
-`useEffect`'da `setInterval(loadJobs, 2000)` — har 2 soniyada jobs ro'yxati yangilanadi (server oddiy user uchun faqat o'z joblarini qaytaradi). Running / Done / Failed bo'limlari. Job kartasida: status badge (tarjima qilinadi), datasource nomi, **egasi chip'i** (`owner_name` joriy user'dan farq qilsa — admin boshqalarnikini ko'rganda), qator soni, hajm, format chip.
+`useEffect`'da `setInterval(loadJobs, 2000)` — har 2 soniyada jobs ro'yxati yangilanadi (server oddiy user uchun faqat o'z joblarini qaytaradi). Running / Done / Failed bo'limlari. Job kartasida: status badge (tarjima qilinadi), datasource nomi, **egasi chip'i** (`owner_name` joriy user'dan farq qilsa — admin boshqalarnikini ko'rganda), qator soni, hajm, format chip, **qismlar chip'i** (`parts > 1` bo'lsa, "N qism").
 
 Done bo'lganda "Share" (modal: limit + muddat, mavjud link + copy + revoke) va "Yuklab olish" (`api.downloadJob`).
 

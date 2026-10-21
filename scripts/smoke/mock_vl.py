@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Minimal VictoriaLogs mock: GET /select/logsql/query -> NDJSON lines.
-LINES ta qator, har biri 1ms kechikish bilan (export ~3s davom etadi,
-cancel/restart testlari uchun oyna beradi)."""
+
+    mock_vl.py [port] [lines] [delay_per_line_sec]
+
+Default: 3000 qator, har biri 1 ms kechikish bilan (export ~3 s davom etadi —
+cancel/restart testlari uchun oyna). Bo'laklash testi uchun ko'p qator + 0 delay."""
 import json, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 19428
 LINES = int(sys.argv[2]) if len(sys.argv) > 2 else 3000
+DELAY = float(sys.argv[3]) if len(sys.argv) > 3 else 0.001
 
 
 class H(BaseHTTPRequestHandler):
@@ -28,7 +32,8 @@ class H(BaseHTTPRequestHandler):
                 self.wfile.write((json.dumps(line) + "\n").encode())
                 if i % 50 == 0:
                     self.wfile.flush()
-                time.sleep(0.001)
+                if DELAY:
+                    time.sleep(DELAY)
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
