@@ -48,8 +48,12 @@ const (
 	JobFailed  JobStatus = "failed"
 )
 
+// ExportJob — `<DataDir>/jobs.json` da saqlanadi (restart'da yo'qolmaydi).
+// Running holatida uzilgan job server qayta ishga tushganda failed bo'ladi.
 type ExportJob struct {
 	ID             string    `json:"id"`
+	OwnerID        string    `json:"owner_id"`
+	OwnerName      string    `json:"owner_name,omitempty"` // snapshot (username)
 	Query          string    `json:"query"`
 	DatasourceID   string    `json:"datasource_id"`
 	DatasourceName string    `json:"datasource_name"`
@@ -62,7 +66,7 @@ type ExportJob struct {
 	End            string    `json:"end,omitempty"`
 	SortOrder      string    `json:"sort_order,omitempty"`
 	// Format: "log" (xom NDJSON) | "log.gz" (gzipped) | "tar.gz" (tar+gzip).
-	// Bo'sh bo'lsa "log" deb interpretatsiya qilinadi (eski joblar uchun).
+	// StartExport'da normalizatsiya qilinadi, shu sababli saqlangan jobda doim to'ldirilgan.
 	Format string `json:"format,omitempty"`
 	// Size — diskdagi yakuniy fayl hajmi (baytlar).
 	Size int64 `json:"size"`
@@ -72,11 +76,11 @@ type ExportJob struct {
 // ExpiresAt nil bo'lsa muddati cheksiz, MaxDownloads 0 bo'lsa cheklov yo'q.
 // Limit/expiry hodisalaridan keyin fayl + job + ushbu share o'chadi.
 type ShareLink struct {
-	Token         string     `json:"token"`            // URL'dagi token (URL-safe base64)
+	Token         string     `json:"token"` // URL'dagi token (URL-safe base64)
 	JobID         string     `json:"job_id"`
-	CreatedBy     string     `json:"created_by"`       // user ID
+	CreatedBy     string     `json:"created_by"` // user ID
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	MaxDownloads  int        `json:"max_downloads"`    // 0 = cheksiz
+	MaxDownloads  int        `json:"max_downloads"` // 0 = cheksiz
 	DownloadCount int        `json:"download_count"`
 }

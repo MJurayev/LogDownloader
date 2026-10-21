@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/logdownloader
-Environment=PORT=3000
-Environment=DATA_DIR=/var/lib/logdownloader
+# Env YAML'dan ustun turadi — shu yerda PORT/DATA_DIR bermaymiz, aks holda
+# /etc/logdownloader/config.yaml dagi qiymatlar e'tiborga olinmaydi.
 WorkingDirectory=/var/lib/logdownloader
 Restart=on-failure
 RestartSec=5

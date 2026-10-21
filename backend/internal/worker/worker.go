@@ -4,13 +4,16 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"logdownloader/internal/model"
@@ -18,58 +21,95 @@ import (
 	"logdownloader/internal/vlclient"
 )
 
-// Supported export formats. "" treated as FormatLog (backward compatibility).
+// Supported export formats. Noma'lum yoki bo'sh qiymat FormatTarGz'ga
+// normalizatsiya qilinadi (UI'da ham format qulflangan: faqat .tar.gz).
 const (
-	FormatLog    = "log"
-	FormatLogGz  = "log.gz"
-	FormatTarGz  = "tar.gz"
+	FormatLog   = "log"
+	FormatLogGz = "log.gz"
+	FormatTarGz = "tar.gz"
 )
 
+// ExportParams — StartExport kirish parametrlari.
+type ExportParams struct {
+	Query        string
+	DatasourceID string
+	Start        string
+	End          string
+	SortOrder    string
+	Name         string
+	Format       string
+	OwnerID      string
+	OwnerName    string
+}
+
 type Worker struct {
-	store *store.Store
+	store   *store.Store
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc // jobID -> running export'ni to'xtatish
 }
 
 func New(s *store.Store) *Worker {
-	return &Worker{store: s}
+	return &Worker{store: s, cancels: make(map[string]context.CancelFunc)}
 }
 
-func (w *Worker) StartExport(query, datasourceID, start, end, sortOrder, name, format string) string {
+func (w *Worker) StartExport(p ExportParams) string {
 	createdAt := time.Now()
 	jobID := fmt.Sprintf("job_%d", createdAt.UnixNano())
-	format = normalizeFormat(format)
-	fileName := sanitizeFileName(name, createdAt, format)
+	format := normalizeFormat(p.Format)
+	fileName := sanitizeFileName(p.Name, createdAt, format)
 
-	dsName := datasourceID
-	if ds := w.store.GetDatasource(datasourceID); ds != nil {
+	dsName := p.DatasourceID
+	if ds := w.store.GetDatasource(p.DatasourceID); ds != nil {
 		dsName = ds.Name
 	}
 
 	job := &model.ExportJob{
 		ID:             jobID,
-		Query:          query,
-		DatasourceID:   datasourceID,
+		OwnerID:        p.OwnerID,
+		OwnerName:      p.OwnerName,
+		Query:          p.Query,
+		DatasourceID:   p.DatasourceID,
 		DatasourceName: dsName,
 		Status:         model.JobRunning,
 		FileName:       fileName,
 		CreatedAt:      createdAt,
-		Start:          start,
-		End:            end,
-		SortOrder:      sortOrder,
+		Start:          p.Start,
+		End:            p.End,
+		SortOrder:      p.SortOrder,
 		Format:         format,
 	}
 
-	w.store.AddJob(job)
-	go w.runExport(job)
+	ctx, cancel := context.WithCancel(context.Background())
+	w.mu.Lock()
+	w.cancels[jobID] = cancel
+	w.mu.Unlock()
+
+	if err := w.store.AddJob(job); err != nil {
+		log.Printf("job %s: persist failed: %v", jobID, err)
+	}
+	go w.runExport(ctx, job)
 
 	return jobID
 }
 
+// Cancel running export'ni to'xtatadi (job o'chirilganda chaqiriladi).
+// Job tugagan yoki noma'lum bo'lsa — no-op.
+func (w *Worker) Cancel(jobID string) {
+	w.mu.Lock()
+	cancel, ok := w.cancels[jobID]
+	delete(w.cancels, jobID)
+	w.mu.Unlock()
+	if ok {
+		cancel()
+	}
+}
+
 func normalizeFormat(f string) string {
 	switch f {
-	case FormatLogGz, FormatTarGz:
+	case FormatLog, FormatLogGz, FormatTarGz:
 		return f
 	default:
-		return FormatLog
+		return FormatTarGz
 	}
 }
 
@@ -132,7 +172,20 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (w *Worker) runExport(job *model.ExportJob) {
+func (w *Worker) runExport(ctx context.Context, job *model.ExportJob) {
+	// Tugaganda cancel map'dan chiqadi va context resurslari bo'shaydi.
+	defer w.Cancel(job.ID)
+
+	outPath := filepath.Join(w.store.ExportsDir(), job.FileName)
+	// Job bekor qilingan (o'chirilgan) bo'lsa chala fayl yoki .tmp qolmasin —
+	// DeleteJob fayl yaratilishidan oldin kelgan bo'lishi mumkin.
+	defer func() {
+		if ctx.Err() != nil {
+			os.Remove(outPath)
+			os.Remove(outPath + ".tmp")
+		}
+	}()
+
 	ds := w.store.GetDatasource(job.DatasourceID)
 	if ds == nil {
 		w.store.UpdateJobStatus(job.ID, model.JobFailed, "Datasource not found", 0)
@@ -155,7 +208,7 @@ func (w *Worker) runExport(job *model.ExportJob) {
 		params.Set("end", job.End)
 	}
 
-	resp, err := vlclient.DoLongRunning("GET", exportURL+"?"+params.Encode(), *ds)
+	resp, err := vlclient.DoLongRunning(ctx, "GET", exportURL+"?"+params.Encode(), *ds)
 	if err != nil {
 		w.store.UpdateJobStatus(job.ID, model.JobFailed, fmt.Sprintf("request failed: %v", err), 0)
 		return
@@ -168,7 +221,9 @@ func (w *Worker) runExport(job *model.ExportJob) {
 		return
 	}
 
-	outPath := filepath.Join(w.store.ExportsDir(), job.FileName)
+	if ctx.Err() != nil {
+		return
+	}
 
 	switch job.Format {
 	case FormatLogGz:
@@ -308,7 +363,8 @@ func (w *Worker) writeTarGz(job *model.ExportJob, body io.Reader, outPath string
 
 // streamLines VictoriaLogs response'idan qator-bo'yicha o'qib writer'ga yozadi.
 // Muvaffaqiyatli tugaganda lines qaytaradi. Xato bo'lsa job'ni failed deb belgilab
-// -1 qaytaradi (caller buni ko'rib qaytishi kerak).
+// -1 qaytaradi (caller buni ko'rib qaytishi kerak). Context bekor qilinsa
+// o'qish xato bilan uziladi; job allaqachon o'chirilgan bo'lsa UpdateJobStatus no-op.
 func (w *Worker) streamLines(job *model.ExportJob, body io.Reader, writer io.Writer) int64 {
 	reader := bufio.NewReaderSize(body, 64*1024)
 	var lines int64

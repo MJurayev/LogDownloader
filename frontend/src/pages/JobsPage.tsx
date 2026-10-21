@@ -1,26 +1,29 @@
 import { useState, useEffect, useRef } from "react";
 import { api, type ExportJob, type ShareLink } from "../api";
+import { useT, type TKey } from "../i18n";
 import "./Pages.css";
 
-const EXPIRY_OPTIONS: { label: string; minutes: number | null }[] = [
-  { label: "1 soat", minutes: 60 },
-  { label: "6 soat", minutes: 6 * 60 },
-  { label: "24 soat", minutes: 24 * 60 },
-  { label: "7 kun", minutes: 7 * 24 * 60 },
-  { label: "Cheksiz", minutes: null },
+const EXPIRY_OPTIONS: { labelKey: TKey; minutes: number | null }[] = [
+  { labelKey: "hours1", minutes: 60 },
+  { labelKey: "hours6", minutes: 6 * 60 },
+  { labelKey: "hours24", minutes: 24 * 60 },
+  { labelKey: "days7", minutes: 7 * 24 * 60 },
+  { labelKey: "unlimited", minutes: null },
 ];
 
-const LIMIT_OPTIONS: { label: string; value: number }[] = [
+const LIMIT_OPTIONS: { label: string; labelKey?: TKey; value: number }[] = [
   { label: "1", value: 1 },
   { label: "5", value: 5 },
   { label: "10", value: 10 },
   { label: "50", value: 50 },
-  { label: "Cheksiz", value: 0 },
+  { label: "", labelKey: "unlimited", value: 0 },
 ];
 
 export default function JobsPage() {
+  const { t } = useT();
   const [jobs, setJobs] = useState<ExportJob[]>([]);
   const intervalRef = useRef<number | undefined>(undefined);
+  const currentUser = JSON.parse(localStorage.getItem("user") || "{}") as { username?: string; role?: string };
 
   // Share modal state
   const [shareJob, setShareJob] = useState<ExportJob | null>(null);
@@ -84,7 +87,7 @@ export default function JobsPage() {
       });
       setShareExisting(share);
     } catch (err) {
-      setShareError(typeof err === "string" ? err : "Share yaratishda xatolik");
+      setShareError(typeof err === "string" ? err : t("shareError"));
     } finally {
       setShareLoading(false);
     }
@@ -108,7 +111,7 @@ export default function JobsPage() {
       setShareCopied(true);
       setTimeout(() => setShareCopied(false), 1500);
     } catch {
-      setShareError("Clipboard'ga ko'chirib bo'lmadi");
+      setShareError(t("clipboardError"));
     }
   };
 
@@ -131,7 +134,9 @@ export default function JobsPage() {
         : status === "done"
         ? "badge badge-done"
         : "badge badge-failed";
-    return <span className={cls}>{status.toUpperCase()}</span>;
+    const label =
+      status === "running" ? t("statusRunning") : status === "done" ? t("statusDone") : t("statusFailed");
+    return <span className={cls}>{label}</span>;
   };
 
   const running = jobs.filter((j) => j.status === "running");
@@ -144,7 +149,10 @@ export default function JobsPage() {
         <div className="job-header-left">
           {statusBadge(job.status)}
           {job.datasource_name && <span className="job-ds-name">{job.datasource_name}</span>}
-          <span className="job-lines">{job.lines.toLocaleString()} qator</span>
+          {job.owner_name && job.owner_name !== currentUser.username && (
+            <span className="job-owner" title={t("owner")}>{job.owner_name}</span>
+          )}
+          <span className="job-lines">{t("linesCount", { n: job.lines.toLocaleString() })}</span>
           {job.size > 0 && <span className="job-size">{formatBytes(job.size)}</span>}
           {job.format && job.format !== "log" && (
             <span className="job-format-chip">{job.format}</span>
@@ -156,15 +164,15 @@ export default function JobsPage() {
               <button
                 onClick={() => openShare(job)}
                 className="btn btn-small btn-outline"
-                title="Share link yaratish / boshqarish"
+                title={t("shareButtonTitle")}
               >
-                Share
+                {t("share")}
               </button>
               <button
                 onClick={() => api.downloadJob(job.id, job.file_name)}
                 className="btn btn-small btn-primary"
               >
-                Yuklab olish
+                {t("download")}
               </button>
             </>
           )}
@@ -172,18 +180,18 @@ export default function JobsPage() {
             onClick={() => handleDelete(job.id)}
             className="btn btn-small btn-danger"
           >
-            O'chirish
+            {t("delete")}
           </button>
         </div>
       </div>
-      <div className="job-filename" title="Yuklab olinadigan fayl nomi">
+      <div className="job-filename" title={t("fileNameTitle")}>
         {job.file_name}
       </div>
       <code className="query-code">{job.query}</code>
       {(job.start || job.end) && (
         <div className="job-range">
-          <span title={job.start ? `UTC: ${job.start}` : ""}>From: {job.start ? new Date(job.start).toLocaleString() : "—"}</span>
-          <span title={job.end ? `UTC: ${job.end}` : ""}>To: {job.end ? new Date(job.end).toLocaleString() : "—"}</span>
+          <span title={job.start ? `UTC: ${job.start}` : ""}>{t("jobFrom")} {job.start ? new Date(job.start).toLocaleString() : "—"}</span>
+          <span title={job.end ? `UTC: ${job.end}` : ""}>{t("jobTo")} {job.end ? new Date(job.end).toLocaleString() : "—"}</span>
         </div>
       )}
       {job.error && <div className="error-text">{job.error}</div>}
@@ -195,23 +203,23 @@ export default function JobsPage() {
 
   return (
     <div className="page">
-      <h1>Jobs</h1>
+      <h1>{t("jobsTitle")}</h1>
       <p className="subtitle">
-        Jami {jobs.length} ta job
-        {running.length > 0 && <span className="jobs-counter running">{running.length} running</span>}
-        {done.length > 0 && <span className="jobs-counter done">{done.length} done</span>}
-        {failed.length > 0 && <span className="jobs-counter failed">{failed.length} failed</span>}
+        {t("jobsTotal", { n: jobs.length })}
+        {running.length > 0 && <span className="jobs-counter running">{t("runningCount", { n: running.length })}</span>}
+        {done.length > 0 && <span className="jobs-counter done">{t("doneCount", { n: done.length })}</span>}
+        {failed.length > 0 && <span className="jobs-counter failed">{t("failedCount", { n: failed.length })}</span>}
       </p>
 
       {jobs.length === 0 && (
-        <p className="empty">Hozircha hech qanday job yo'q</p>
+        <p className="empty">{t("noJobs")}</p>
       )}
 
       {running.length > 0 && (
         <div className="jobs-section">
           <h3 className="jobs-section-title">
             <span className="section-dot dot-running" />
-            Running ({running.length})
+            {t("sectionRunning")} ({running.length})
           </h3>
           <div className="list">{running.map(renderJob)}</div>
         </div>
@@ -221,7 +229,7 @@ export default function JobsPage() {
         <div className="jobs-section">
           <h3 className="jobs-section-title">
             <span className="section-dot dot-done" />
-            Done ({done.length})
+            {t("sectionDone")} ({done.length})
           </h3>
           <div className="list">{done.map(renderJob)}</div>
         </div>
@@ -231,7 +239,7 @@ export default function JobsPage() {
         <div className="jobs-section">
           <h3 className="jobs-section-title">
             <span className="section-dot dot-failed" />
-            Failed ({failed.length})
+            {t("sectionFailed")} ({failed.length})
           </h3>
           <div className="list">{failed.map(renderJob)}</div>
         </div>
@@ -240,7 +248,7 @@ export default function JobsPage() {
       {shareJob && (
         <div className="save-modal-overlay" onClick={closeShare}>
           <div className="save-modal share-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Share link</h3>
+            <h3>{t("shareTitle")}</h3>
             <p className="share-modal-sub">
               <code>{shareJob.file_name}</code>
             </p>
@@ -248,64 +256,64 @@ export default function JobsPage() {
             {shareExisting ? (
               <>
                 <div className="form-group">
-                  <label className="label">Link</label>
+                  <label className="label">{t("link")}</label>
                   <div className="share-url-row">
                     <input value={shareExisting.url} readOnly className="input" />
                     <button onClick={copyShareUrl} className="btn btn-small btn-primary">
-                      {shareCopied ? "Ko'chirildi!" : "Copy"}
+                      {shareCopied ? t("copied") : t("copy")}
                     </button>
                   </div>
                 </div>
                 <div className="share-stats">
                   <div>
-                    <span className="share-stat-label">Yuklab olishlar</span>
+                    <span className="share-stat-label">{t("downloadsStat")}</span>
                     <span className="share-stat-value">
                       {shareExisting.download_count}
                       {shareExisting.max_downloads > 0 ? ` / ${shareExisting.max_downloads}` : " / ∞"}
                     </span>
                   </div>
                   <div>
-                    <span className="share-stat-label">Muddati</span>
+                    <span className="share-stat-label">{t("expiryStat")}</span>
                     <span className="share-stat-value">
                       {shareExisting.expires_at
                         ? new Date(shareExisting.expires_at).toLocaleString()
-                        : "Cheksiz"}
+                        : t("unlimited")}
                     </span>
                   </div>
                 </div>
                 <div className="share-warning">
-                  Limit yetganda yoki muddat o'tganda fayl o'chiriladi.
+                  {t("shareWarning")}
                 </div>
                 {shareError && <div className="error-text">{shareError}</div>}
                 <div className="save-modal-actions">
                   <button onClick={closeShare} className="btn btn-small btn-outline">
-                    Yopish
+                    {t("close")}
                   </button>
                   <button
                     onClick={handleRevokeShare}
                     disabled={shareLoading}
                     className="btn btn-small btn-danger"
                   >
-                    {shareLoading ? "..." : "Bekor qilish (Revoke)"}
+                    {shareLoading ? "..." : t("revoke")}
                   </button>
                 </div>
               </>
             ) : (
               <>
                 <div className="form-group">
-                  <label className="label">Maksimal yuklab olishlar</label>
+                  <label className="label">{t("maxDownloads")}</label>
                   <select
                     value={maxDownloads}
                     onChange={(e) => setMaxDownloads(Number(e.target.value))}
                     className="input ds-select"
                   >
                     {LIMIT_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                      <option key={o.value} value={o.value}>{o.labelKey ? t(o.labelKey) : o.label}</option>
                     ))}
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="label">Muddati</label>
+                  <label className="label">{t("expiryStat")}</label>
                   <select
                     value={String(expiryMinutes)}
                     onChange={(e) => {
@@ -315,26 +323,26 @@ export default function JobsPage() {
                     className="input ds-select"
                   >
                     {EXPIRY_OPTIONS.map((o) => (
-                      <option key={o.label} value={o.minutes === null ? "null" : String(o.minutes)}>
-                        {o.label}
+                      <option key={o.labelKey} value={o.minutes === null ? "null" : String(o.minutes)}>
+                        {t(o.labelKey)}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div className="share-warning">
-                  Limit yetganda yoki muddat o'tganda fayl avtomatik o'chiriladi.
+                  {t("shareWarningAuto")}
                 </div>
                 {shareError && <div className="error-text">{shareError}</div>}
                 <div className="save-modal-actions">
                   <button onClick={closeShare} disabled={shareLoading} className="btn btn-small btn-outline">
-                    Bekor qilish
+                    {t("cancel")}
                   </button>
                   <button
                     onClick={handleCreateShare}
                     disabled={shareLoading}
                     className="btn btn-small btn-primary"
                   >
-                    {shareLoading ? "..." : "Yaratish"}
+                    {shareLoading ? "..." : t("create")}
                   </button>
                 </div>
               </>

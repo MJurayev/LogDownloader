@@ -71,7 +71,7 @@ func GenerateToken(user model.User) (string, error) {
 func parseToken(tokenStr string) (jwt.MapClaims, error) {
 	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
 		return jwtSecret, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 	if err != nil {
 		return nil, err
 	}
@@ -92,9 +92,15 @@ func GetUser(r *http.Request) *AuthUser {
 	return u
 }
 
-func Middleware(next http.Handler) http.Handler {
+// UserLookup token'dagi user ID bo'yicha joriy userni store'dan qaytaradi.
+// nil bo'lsa (user o'chirilgan) token rad etiladi. Username va rol ham
+// store'dan olinadi — rol o'zgarishi re-login'siz, keyingi so'rovdan kuchga kiradi.
+type UserLookup func(id string) *model.User
+
+// Middleware `/api/*` (login'dan tashqari) uchun JWT tekshiradi. Boshqa barcha
+// yo'llar (static fayllar, `/dl/{token}`) auth'siz o'tadi.
+func Middleware(next http.Handler, lookup UserLookup) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Skip auth for login endpoint and static files
 		if r.URL.Path == "/api/login" || !strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
@@ -123,10 +129,21 @@ func Middleware(next http.Handler) http.Handler {
 			return
 		}
 
+		uid, _ := claims["user_id"].(string)
+		if uid == "" {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		stored := lookup(uid)
+		if stored == nil {
+			http.Error(w, "user not found", http.StatusUnauthorized)
+			return
+		}
+
 		user := &AuthUser{
-			ID:       claims["user_id"].(string),
-			Username: claims["username"].(string),
-			Role:     model.Role(claims["role"].(string)),
+			ID:       stored.ID,
+			Username: stored.Username,
+			Role:     stored.Role,
 		}
 
 		ctx := context.WithValue(r.Context(), userCtxKey, user)

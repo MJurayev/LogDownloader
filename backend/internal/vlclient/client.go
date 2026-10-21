@@ -1,6 +1,7 @@
 package vlclient
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -28,7 +29,7 @@ func WithTimeSort(query, order string) string {
 // longRunningClient — export worker uchun. Hech qanday vaqt limiti yo'q,
 // chunki katta export soatlab oqib turishi mumkin. Faqat initial dial va
 // TLS handshake'da timeout qoldirilgan (aks holda ulanmagan endpoint'da
-// abadiy osilib qoladi).
+// abadiy osilib qoladi). Bekor qilish faqat context orqali.
 var longRunningClient = &http.Client{
 	Timeout: 0,
 	Transport: &http.Transport{
@@ -46,8 +47,8 @@ var longRunningClient = &http.Client{
 	},
 }
 
-func NewRequest(method, url string, ds model.Datasource) (*http.Request, error) {
-	req, err := http.NewRequest(method, url, nil)
+func NewRequest(ctx context.Context, method, url string, ds model.Datasource) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -63,8 +64,9 @@ func NewRequest(method, url string, ds model.Datasource) (*http.Request, error) 
 	return req, nil
 }
 
+// Do — qisqa so'rovlar uchun (Log Viewer query). Default client.
 func Do(method, url string, ds model.Datasource) (*http.Response, error) {
-	req, err := NewRequest(method, url, ds)
+	req, err := NewRequest(context.Background(), method, url, ds)
 	if err != nil {
 		return nil, err
 	}
@@ -72,9 +74,9 @@ func Do(method, url string, ds model.Datasource) (*http.Response, error) {
 }
 
 // DoLongRunning — VictoriaLogs javobini uzoq muddat (soatlar) stream qilish
-// uchun. Export worker'da ishlatiladi.
-func DoLongRunning(method, url string, ds model.Datasource) (*http.Response, error) {
-	req, err := NewRequest(method, url, ds)
+// uchun. Export worker'da ishlatiladi; ctx bekor qilinsa oqim uziladi.
+func DoLongRunning(ctx context.Context, method, url string, ds model.Datasource) (*http.Response, error) {
+	req, err := NewRequest(ctx, method, url, ds)
 	if err != nil {
 		return nil, err
 	}

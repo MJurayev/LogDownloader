@@ -26,6 +26,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to init store: %v", err)
 	}
+	// Oldingi ishga tushishdan qolgan uzilgan joblar va orphan fayllarni tozalash.
+	if interrupted, orphans := s.RecoverJobs(); interrupted > 0 || orphans > 0 {
+		log.Printf("Recovered jobs: %d interrupted marked failed, %d orphan export file(s) removed", interrupted, orphans)
+	}
 
 	secret := cfg.JWTSecret
 	if secret == "" {
@@ -84,8 +88,9 @@ func main() {
 		fileServer.ServeHTTP(rw, r)
 	})
 
-	// Auth middleware wraps CORS
-	wrapped := corsMiddleware(auth.Middleware(mux))
+	// Auth middleware wraps CORS. User har so'rovda store'dan qayta o'qiladi —
+	// o'chirilgan user tokeni darhol yaroqsiz, rol o'zgarishi darhol kuchga kiradi.
+	wrapped := corsMiddleware(auth.Middleware(mux, s.GetUser))
 
 	listenAddr := cfg.Host + ":" + cfg.Port
 	if cfg.Host == "" {

@@ -26,7 +26,10 @@ export interface Datasource {
   name: string;
   url: string;
   username?: string;
+  // Faqat yuborishda ishlatiladi; server GET javobida parolni qaytarmaydi,
+  // o'rniga `has_password` beradi. Yangilashda bo'sh parol = o'zgartirilmasin.
   password?: string;
+  has_password?: boolean;
   headers?: Record<string, string>;
   global: boolean;
   owner_id: string;
@@ -45,6 +48,8 @@ export type ExportFormat = "log" | "log.gz" | "tar.gz";
 
 export interface ExportJob {
   id: string;
+  owner_id: string;
+  owner_name?: string;
   query: string;
   datasource_id: string;
   datasource_name: string;
@@ -108,13 +113,13 @@ export const api = {
   getDatasources: (): Promise<Datasource[]> =>
     authFetch(`${API}/datasources`).then((r) => r.json()),
 
-  createDatasource: (ds: Omit<Datasource, "id" | "owner_id">): Promise<Datasource> =>
+  createDatasource: (ds: Omit<Datasource, "id" | "owner_id" | "has_password">): Promise<Datasource> =>
     authFetch(`${API}/datasources`, {
       method: "POST",
       body: JSON.stringify(ds),
     }).then((r) => r.json()),
 
-  updateDatasource: (id: string, ds: Omit<Datasource, "id" | "owner_id">): Promise<Datasource> =>
+  updateDatasource: (id: string, ds: Omit<Datasource, "id" | "owner_id" | "has_password">): Promise<Datasource> =>
     authFetch(`${API}/datasources/${id}`, {
       method: "PUT",
       body: JSON.stringify(ds),
@@ -168,6 +173,7 @@ export const api = {
   },
 
   // Export & Jobs
+  // UI'da format qulflangan (.tar.gz). Server ham bo'sh/noma'lum formatni tar.gz deb oladi.
   startExport: (
     query: string,
     datasourceId: string,
@@ -175,7 +181,7 @@ export const api = {
     end?: string,
     sortOrder?: "asc" | "desc",
     name?: string,
-    format?: ExportFormat,
+    format: ExportFormat = "tar.gz",
   ): Promise<{ job_id: string }> =>
     authFetch(`${API}/export`, {
       method: "POST",
@@ -186,9 +192,12 @@ export const api = {
         end: end || "",
         sort_order: sortOrder || "",
         name: name || "",
-        format: format || "log",
+        format,
       }),
-    }).then((r) => r.json()),
+    }).then((r) => {
+      if (!r.ok) return r.text().then((t) => Promise.reject(t));
+      return r.json();
+    }),
 
   getJobs: (): Promise<ExportJob[]> =>
     authFetch(`${API}/jobs`).then((r) => r.json()),

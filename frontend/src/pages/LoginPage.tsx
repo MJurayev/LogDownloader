@@ -1,14 +1,17 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { useT, type Lang } from "../i18n";
 import "./Pages.css";
 
 export default function LoginPage({ onLogin }: { onLogin: () => void }) {
+  const { t, lang, setLang } = useT();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const otherLang: Lang = lang === "uz" ? "ru" : "uz";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,7 +24,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
       onLogin();
       navigate("/");
     } catch {
-      setError("Login yoki parol noto'g'ri");
+      setError(t("loginError"));
     } finally {
       setLoading(false);
     }
@@ -30,13 +33,23 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
+        <button
+          type="button"
+          className="login-lang-toggle"
+          onClick={() => setLang(otherLang)}
+          title={t("langSwitchTitle")}
+        >
+          <span className={`lang-opt ${lang === "uz" ? "active" : ""}`}>UZ</span>
+          <span className="lang-sep">/</span>
+          <span className={`lang-opt ${lang === "ru" ? "active" : ""}`}>RU</span>
+        </button>
         <h1 className="login-title">LogDownloader</h1>
-        <p className="login-subtitle">Tizimga kirish</p>
+        <p className="login-subtitle">{t("loginSubtitle")}</p>
         {error && <div className="login-error">{error}</div>}
         <input
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          placeholder="Username"
+          placeholder={t("username")}
           className="input"
           autoFocus
         />
@@ -44,11 +57,11 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="Password"
+          placeholder={t("password")}
           className="input"
         />
         <button type="submit" disabled={loading || !username || !password} className="btn btn-primary login-btn">
-          {loading ? "..." : "Kirish"}
+          {loading ? "..." : t("loginButton")}
         </button>
       </form>
     </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api, type Datasource } from "../api";
+import { useT } from "../i18n";
 import "./Pages.css";
 
 type HeaderRow = { key: string; value: string };
@@ -8,6 +9,7 @@ type DSForm = {
   url: string;
   username: string;
   password: string;
+  hasPassword: boolean; // serverda parol saqlangan (GET javobida parol qaytmaydi)
   global: boolean;
   headers: HeaderRow[];
 };
@@ -17,6 +19,7 @@ const emptyForm = (): DSForm => ({
   url: "",
   username: "",
   password: "",
+  hasPassword: false,
   global: false,
   headers: [],
 });
@@ -25,12 +28,15 @@ const formFromDS = (ds: Datasource): DSForm => ({
   name: ds.name,
   url: ds.url,
   username: ds.username || "",
-  password: ds.password || "",
+  password: "",
+  hasPassword: !!ds.has_password,
   global: ds.global,
   headers: Object.entries(ds.headers || {}).map(([key, value]) => ({ key, value })),
 });
 
-const formToBody = (f: DSForm): Omit<Datasource, "id" | "owner_id"> => {
+// Bo'sh parol yuborilsa server mavjud parolni saqlab qoladi (username bo'sh
+// bo'lmasa). Shu sababli tahrirlashda parol maydonini bo'sh qoldirish xavfsiz.
+const formToBody = (f: DSForm): Omit<Datasource, "id" | "owner_id" | "has_password"> => {
   const headersMap: Record<string, string> = {};
   f.headers.forEach((h) => {
     const k = h.key.trim();
@@ -47,6 +53,7 @@ const formToBody = (f: DSForm): Omit<Datasource, "id" | "owner_id"> => {
 };
 
 export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
+  const { t } = useT();
   const [datasources, setDatasources] = useState<Datasource[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -115,66 +122,72 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
     return (
       <>
         <div className="form-group">
-          <label className="label">Nomi</label>
+          <label className="label">{t("name")}</label>
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Production VictoriaLogs" className="input" />
         </div>
         <div className="form-group">
-          <label className="label">URL</label>
+          <label className="label">{t("url")}</label>
           <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="http://victorialogs:9428" className="input" />
         </div>
         <div className="form-group">
-          <label className="label">Basic Auth (ixtiyoriy)</label>
+          <label className="label">{t("basicAuth")}</label>
           <div className="settings-auth-row">
-            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Username" className="input" />
-            <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password" className="input" />
+            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder={t("username")} className="input" />
+            <input
+              type="password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              placeholder={form.hasPassword && form.username ? t("passwordSavedPlaceholder") : t("password")}
+              className="input"
+            />
           </div>
         </div>
         <div className="form-group">
-          <label className="label">Headers (ixtiyoriy)</label>
+          <label className="label">{t("headers")}</label>
           {form.headers.map((h, i) => (
             <div key={i} className="settings-header-row" style={{ marginBottom: 8 }}>
               <input
                 value={h.key}
                 onChange={(e) => updateHeader(i, "key", e.target.value)}
-                placeholder="Header name (masalan: X-Tenant)"
+                placeholder={t("headerNamePlaceholder")}
                 className="input"
               />
               <input
                 value={h.value}
                 onChange={(e) => updateHeader(i, "value", e.target.value)}
-                placeholder="Value"
+                placeholder={t("headerValue")}
                 className="input"
               />
               <button
                 type="button"
                 onClick={() => removeHeader(i)}
                 className="btn btn-small btn-danger"
-                title="Header o'chirish"
+                title={t("removeHeader")}
               >
                 ×
               </button>
             </div>
           ))}
           <button type="button" onClick={addHeader} className="btn btn-small btn-outline">
-            + Header qo'shish
+            {t("addHeader")}
           </button>
         </div>
         {isAdmin && (
           <label className="global-check">
             <input type="checkbox" checked={form.global} onChange={(e) => setForm({ ...form, global: e.target.checked })} />
-            Global (barcha userlarga ko'rinadi)
+            {t("globalHint")}
           </label>
         )}
       </>
     );
   };
 
-  if (loading) return <div className="page">Yuklanmoqda...</div>;
+  if (loading) return <div className="page">{t("loading")}</div>;
 
   return (
     <div className="page">
-      <h1>Settings</h1>
-      <p className="subtitle">VictoriaLogs datasource'larni boshqarish</p>
+      <h1>{t("settingsTitle")}</h1>
+      <p className="subtitle">{t("settingsSubtitle")}</p>
 
       <div className="ds-list">
         {datasources.map((ds) => (
@@ -182,8 +195,8 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
             <div className="ds-card-header" onClick={() => toggleExpand(ds)}>
               <div className="ds-card-title">
                 <span className="ds-dot" />
-                <strong>{ds.name || "Nomsiz"}</strong>
-                {ds.global && <span className="global-badge">Global</span>}
+                <strong>{ds.name || t("unnamed")}</strong>
+                {ds.global && <span className="global-badge">{t("globalBadge")}</span>}
                 <span className="ds-url-hint">{ds.url}</span>
               </div>
               <div className="ds-card-actions">
@@ -191,7 +204,7 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
                   onClick={(e) => { e.stopPropagation(); handleDelete(ds.id); }}
                   className="btn btn-small btn-danger"
                 >
-                  O'chirish
+                  {t("delete")}
                 </button>
                 <span className="ds-chevron">{expandedId === ds.id ? "▲" : "▼"}</span>
               </div>
@@ -205,14 +218,14 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
                     onClick={() => { setExpandedId(null); setEditingDS(null); }}
                     className="btn btn-small btn-outline"
                   >
-                    Bekor
+                    {t("cancelShort")}
                   </button>
                   <button
                     onClick={handleUpdate}
                     disabled={saving || !editingDS.name.trim() || !editingDS.url.trim()}
                     className="btn btn-small btn-primary"
                   >
-                    {saving ? "..." : "Saqlash"}
+                    {saving ? "..." : t("save")}
                   </button>
                 </div>
               </div>
@@ -230,21 +243,21 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
                 onClick={() => { setShowNew(false); setNewDS(emptyForm()); }}
                 className="btn btn-small btn-outline"
               >
-                Bekor
+                {t("cancelShort")}
               </button>
               <button
                 onClick={handleCreate}
                 disabled={saving || !newDS.name.trim() || !newDS.url.trim()}
                 className="btn btn-small btn-primary"
               >
-                {saving ? "..." : "Saqlash"}
+                {saving ? "..." : t("save")}
               </button>
             </div>
           </div>
         </div>
       ) : (
         <button onClick={() => setShowNew(true)} className="btn btn-outline">
-          + Datasource qo'shish
+          {t("addDatasource")}
         </button>
       )}
     </div>

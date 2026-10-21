@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import "./index.css";
 import App from "./App";
+import { LangProvider } from "./i18n";
 
 // React mount'idan oldin theme'ni qo'llab qo'yish — flash of unstyled / wrong
 // theme bo'lmasligi uchun. localStorage'da yo'q bo'lsa OS prefersini olamiz.
@@ -19,8 +20,10 @@ import App from "./App";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <LangProvider>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </LangProvider>
   </StrictMode>
 );

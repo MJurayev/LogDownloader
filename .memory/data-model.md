@@ -9,11 +9,14 @@ Storage — disk ustida JSON fayllar. Library yo'q, faqat `encoding/json` + `os.
 ├── settings.json           # model.Settings  { datasources: [...] }
 ├── queries.json            # map[id]SavedQuery
 ├── users.json              # map[id]User (parol bcrypt hash bilan!)
+├── jobs.json               # map[id]ExportJob (yakuniy holatlar; progress yozilmaydi)
+├── shares.json             # map[token]ShareLink
+├── jwt_secret              # 32 bayt hex, 0600 (auto-generate)
 └── exports/
-    └── export_job_*.log    # raw NDJSON, VictoriaLogs'dan stream qilingan
+    └── <nom>_<UTC ts>.tar.gz   # VictoriaLogs'dan stream qilingan NDJSON, tar+gzip
 ```
 
-Eslatma: `settings.json` array shape'da (Settings struct ichida slice), `queries.json` va `users.json` map shape'da. Bu nomuvofiqlik tarixiy — yangi store loadda farqlanadi.
+Eslatma: `settings.json` array shape'da (Settings struct ichida slice), qolganlari map shape'da. Bu nomuvofiqlik tarixiy.
 
 ## Tip ta'riflari
 
@@ -36,12 +39,13 @@ type Datasource struct {
     Name     string
     URL      string             // VictoriaLogs base (e.g. http://...:9428)
     Username string             // basic auth
-    Password string             // plain (!) — disk'da shifrlanmagan
+    Password string             // plain (!) — disk'da shifrlanmagan; API javobida qaytmaydi
     Headers  map[string]string  // custom HTTP headers
     Global   bool               // true bo'lsa hammaga ko'rinadi (faqat admin yarata oladi)
     OwnerID  string
 }
 ```
+API javobi `handler.datasourceView` — `Password` tashlab, `HasPassword bool` qo'shadi.
 
 ### SavedQuery
 ```go
@@ -55,32 +59,53 @@ type SavedQuery struct {
 }
 ```
 
-### ExportJob (in-memory only, restart'da yo'qoladi)
+### ExportJob (jobs.json'da persist)
 ```go
 type ExportJob struct {
     ID             string     // "job_<unixnano>"
+    OwnerID        string     // kim boshlagan
+    OwnerName      string     // username snapshot
     Query          string
     DatasourceID   string
     DatasourceName string     // snapshot
     Status         JobStatus  // "running" | "done" | "failed"
-    FileName       string     // "export_<id>.log"
+    FileName       string     // "<nom>_<UTC ts>.tar.gz"
     CreatedAt      time.Time
     Error          string
-    Lines          int64      // har 1000'da incremental update
+    Lines          int64      // har 1000'da incremental update (faqat xotirada)
+    Start, End     string     // RFC3339 UTC, ixtiyoriy
+    SortOrder      string
+    Format         string     // "tar.gz" (default) | "log.gz" | "log" — StartExport'da normalizatsiya
+    Size           int64      // yakuniy fayl hajmi
+}
+```
+
+### ShareLink (shares.json)
+```go
+type ShareLink struct {
+    Token         string     // URL-safe base64, 16 bayt
+    JobID         string
+    CreatedBy     string
+    CreatedAt     time.Time
+    ExpiresAt     *time.Time // nil = cheksiz
+    MaxDownloads  int        // 0 = cheksiz
+    DownloadCount int
 }
 ```
 
 ## Invariantlar
 
+- **Getter'lar nusxa qaytaradi.** `GetSettings`/`GetDatasourcesForUser` — chuqur nusxa (slice + Headers map), `GetDatasource`/`GetJob`/`GetShare*` — struct nusxasiga pointer, `GetJobsForUser` — `[]ExportJob` nusxalar. `SaveSettings` ham nusxa saqlaydi. Shu sababli handler store'ning ichki ma'lumotiga mutex'siz tegmaydi (oldin `settings.Datasources[i] = input` real data race edi). Store'ga ichki pointer qaytaruvchi metod qo'shmang.
 - **Settings file** doim Settings struct shape'da. Datasource'lar slice ichida, ID bo'yicha indexing yo'q.
-- **Map keys = ID** (queries, users). `SaveQuery(q)` doim `s.queries[q.ID] = q` qiladi — eskisini overwrite qilish ham shu yo'l bilan.
-- **`Global` flag faqat admin'da `true` bo'lib qoladi.** Handler oddiy user kelganda majburan `false`'ga qaytaradi (handler.go:191, 245).
-- **Owner-based access:** `GetDatasourcesForUser` va `GetQueriesForUser` filter qiladi (owner==user || global). Delete handler ham shu qoidaga bo'ysunadi, admin esa hammaga ega.
-- **JobID format** — `fmt.Sprintf("job_%d", time.Now().UnixNano())`. Bu ID file name'ga ham kiradi. Bir nano-second ichida ikkita export bo'lsa to'qnashishi mumkin (amaliyotda kam uchraydi).
-- **Job worker'da progress update** har 1000 qatorda store'ni `UpdateJobStatus(... running, "", lines)` deb chaqiradi — bu in-memory'gina, faylga yozilmaydi (chunki jobs persist qilinmaydi).
-- **Worker HTTP — timeout'siz.** `vlclient.DoLongRunning` (worker.go ichida) dedicated `http.Client{Timeout: 0}` + `Transport{IdleConnTimeout: 0, ResponseHeaderTimeout: 0}` ishlatadi. Faqat dial/TLS handshake'da 30s limit (ulanmagan endpoint'da abadiy osmaslik uchun). Soatlar davom etadigan exportlar uchun mo'ljallangan.
-- **DeleteJob** ham file'ni va in-memory entry'ni o'chiradi. Worker hali yozayotgan bo'lsa — race. Hozircha cancellation yo'q.
+- **Map keys = ID** (queries, users, jobs); shares — token.
+- **`Global` flag faqat admin'da `true` bo'lib qoladi.** Handler oddiy user kelganda majburan `false`'ga qaytaradi.
+- **Owner-based access:** datasource/query — `GetDatasourcesForUser`/`GetQueriesForUser` filter (owner==user || global); job — `GetJobsForUser(ownerID, all)` (admin `all=true`), yozuvchi handlerlar `canAccessJob`.
+- **JobID format** — `fmt.Sprintf("job_%d", time.Now().UnixNano())`. Bir nano-second ichida ikkita export bo'lsa to'qnashishi mumkin (amaliyotda kam uchraydi).
+- **Jobs persist siyosati:** `AddJob`, `DeleteJob`, `UpdateJobStatus(done|failed)`, `purgeShareLocked` → `jobs.json`. `UpdateJobStatus(running, lines)` (progress) va `UpdateJobSize` diskka yozmaydi — yakuniy `done` yozuvi ularni qamrab oladi.
+- **`RecoverJobs()` (startup, main.go):** running qolgan joblar → failed (`"server qayta ishga tushdi, export uzildi"`), ularning fayli + `.tmp` o'chadi; `exports/` dagi hech qaysi jobga tegishli bo'lmagan fayllar (orphan) o'chadi; job'i yo'q yoki done bo'lmagan share'lar o'chadi.
+- **Worker HTTP — timeout'siz, lekin context bilan.** `vlclient.DoLongRunning(ctx, ...)` dedicated `http.Client{Timeout: 0}`; dial/TLS 30s. `worker.Cancel(jobID)` ctx'ni bekor qiladi — `DeleteJob` oldidan handler chaqiradi; worker chiqishda ctx bekor bo'lgan bo'lsa chala faylni o'chiradi.
+- **Store `saveFile` xatosi in-memory holatni qaytarmaydi** (atomar emas) — ma'lum trade-off.
 
 ## Migration / backward compat
 
-Hech qanday version field yo'q. Schema'ni o'zgartirsangiz mavjud installlardagi JSON o'qishni sindirishi mumkin — bunga e'tibor bering. Misol uchun yangi majburiy field qo'shsangiz, eski fayllarda `null/""` bo'lib qoladi.
+Hech qanday version field yo'q. Schema'ni o'zgartirsangiz mavjud installlardagi JSON o'qishni sindirishi mumkin. Eski (`jobs.json`'siz) o'rnatmada birinchi startup `exports/` dagi barcha fayllarni orphan deb o'chiradi — joblar avval xotirada edi, baribir yuklab bo'lmasdi. `owner_id`'siz eski job yozuvi bo'lsa (bo'lishi mumkin emas, lekin) faqat admin ko'radi.

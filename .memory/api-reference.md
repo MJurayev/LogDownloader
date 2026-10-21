@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-Barcha endpointlar `[handler.go](../backend/internal/handler/handler.go)`'da. Auth Bearer JWT majburiy, `/api/login`'dan tashqari.
+Barcha endpointlar [handler.go](../backend/internal/handler/handler.go)'da. Auth Bearer JWT majburiy, `/api/login` va `/dl/{token}`'dan tashqari. Middleware token'dagi `user_id` bo'yicha userni **store'dan** o'qiydi (o'chirilgan user → 401 `user not found`; rol store'dan olinadi).
 
 ## Auth
 
@@ -17,14 +17,14 @@ Barcha endpointlar `[handler.go](../backend/internal/handler/handler.go)`'da. Au
 
 ### GET `/api/me`
 ```json
-// 200
+// 200 — store'dagi joriy qiymatlar (rol o'zgargan bo'lsa yangisi)
 { "user_id": "uuid", "username": "admin", "role": "admin" }
 ```
 
 ## Datasources
 
 ### GET `/api/datasources`
-Qaytarilgan ro'yxat: user owner bo'lgan + `global: true` bo'lgan barcha datasource'lar.
+Qaytarilgan ro'yxat: user owner bo'lgan + `global: true` bo'lgan barcha datasource'lar. **`password` qaytarilmaydi**, o'rniga `has_password`.
 
 ```json
 [
@@ -33,7 +33,7 @@ Qaytarilgan ro'yxat: user owner bo'lgan + `global: true` bo'lgan barcha datasour
     "name": "Prod VL",
     "url": "http://victorialogs:9428",
     "username": "basic-auth-user",
-    "password": "basic-auth-pass",
+    "has_password": true,
     "headers": { "X-Tenant": "team-a" },
     "global": false,
     "owner_id": "user-uuid"
@@ -42,13 +42,13 @@ Qaytarilgan ro'yxat: user owner bo'lgan + `global: true` bo'lgan barcha datasour
 ```
 
 ### POST `/api/datasources`
-Body — Datasource (id/owner_id e'tibordan chiqariladi, server o'rnatadi). `global: true` faqat admin'da saqlanadi, oddiy user'da `false`'ga qaytariladi.
+Body — Datasource (id/owner_id e'tibordan chiqariladi, server o'rnatadi). `global: true` faqat admin'da saqlanadi, oddiy user'da `false`'ga qaytariladi. Javob — yuqoridagi shakl (parolsiz).
 
 ### PUT `/api/datasources/{id}`
-Owner yoki admin. Body — Datasource (id/owner_id preserve qilinadi, mavjud qiymatlardan). `global: true` ham faqat admin'da o'zgaradi; oddiy user'ning request'idagi yangi `global` qiymati e'tiborga olinmaydi (eskisi qoladi). 404 — topilmasa, 403 — owner emas.
+Owner yoki admin. Body — Datasource (id/owner_id preserve qilinadi). `global` faqat admin'da o'zgaradi. **Parol semantikasi:** `username` bo'sh bo'lmasa va `password` bo'sh/yo'q bo'lsa — mavjud parol saqlanib qoladi; `username` bo'sh bo'lsa parol ham tozalanadi. 404 — topilmasa, 403 — owner emas.
 
 ### DELETE `/api/datasources/{id}`
-Owner yoki admin. Aks holda 403.
+Owner yoki admin. Aks holda 403. Saqlash xatosi — 500.
 
 ## Saved Queries
 
@@ -64,7 +64,7 @@ User'niki + global'lar.
 Owner yoki admin. Body — SavedQuery (id/owner_id preserve qilinadi). `global` faqat admin'da o'zgartiriladi. 404 — topilmasa.
 
 ### DELETE `/api/queries/{id}`
-Owner/admin tekshiruvi `handler.go`'da — `else` branch'i yo'q, ya'ni ID topilmasa ham xato bermay o'tib ketadi.
+Owner/admin tekshiruvi `handler.go`'da — ID topilmasa ham 204 (idempotent).
 
 ## Log query (VictoriaLogs proxy)
 
@@ -75,8 +75,8 @@ Owner/admin tekshiruvi `handler.go`'da — `else` branch'i yo'q, ya'ni ID topilm
 | `datasource_id` | majburiy |
 | `limit` | default 50 |
 | `offset` | default 0 |
-| `start` / `end` | ixtiyoriy RFC3339 UTC — bo'sh bo'lsa cheksiz (VictoriaLogs default: barcha loglar) |
-| `sort` | `asc` yoki `desc` — `_time` bo'yicha. Server query'ga `\| sort by (_time)[desc]` pipe qo'shadi. Agar user query'sida `\|` mavjud bo'lsa avtomatik sort qo'shilmaydi (user pipe'ini buzmaslik uchun). Bo'sh bo'lsa VL default tartibida. |
+| `start` / `end` | ixtiyoriy RFC3339 UTC — bo'sh bo'lsa cheksiz |
+| `sort` | `asc` yoki `desc` — `_time` bo'yicha. Server query'ga `\| sort by (_time)[desc]` pipe qo'shadi. Agar user query'sida `\|` mavjud bo'lsa avtomatik sort qo'shilmaydi. |
 
 Server VictoriaLogs `/select/logsql/query`'dan `limit+offset` qator oladi, NDJSON'ni o'qib, in-memory slice qiladi:
 
@@ -90,7 +90,7 @@ Server VictoriaLogs `/select/logsql/query`'dan `limit+offset` qator oladi, NDJSO
 }
 ```
 
-`has_more = total == limit+offset` — bu approximation; VictoriaLogs aslida shuncha qator borligini bildirmaydi.
+`has_more = total == limit+offset` — bu approximation.
 
 ## Export jobs
 
@@ -104,51 +104,58 @@ Server VictoriaLogs `/select/logsql/query`'dan `limit+offset` qator oladi, NDJSO
   "end": "2026-05-21T05:30:00Z",
   "sort_order": "asc",
   "name": "prod-errors",
-  "format": "log.gz"
+  "format": "tar.gz"
 }
 
 // 200
 { "job_id": "job_1714000000000000000" }
 ```
-`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. `format`: `"log"` (xom NDJSON), `"log.gz"` (gzipped), `"tar.gz"` (tar+gzip arxiv); bo'sh bo'lsa `"log"`. Pipe qo'shish mantiqi `/api/query`'dagi `sort` bilan bir xil (`vlclient.WithTimeSort`). `name` — fayl nomi (ixtiyoriy): bo'sh bo'lsa `export` prefix ishlatiladi. Server `sanitizeFileName` orqali tozalaydi (path separator olib tashlanadi, foydalanuvchi qo'ygan `.log`/`.log.gz`/`.tar.gz` suffix kesiladi) va doim oxiriga UTC timestamp + tanlangan format suffix qo'shadi. Misol: `my-prod-logs` + `format=log.gz` → `my-prod-logs_20260521-090655-123.log.gz`.
+`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. `format`: `"tar.gz"` (default — **bo'sh yoki noma'lum qiymat ham `tar.gz`**), `"log"`, `"log.gz"` faqat API orqali aniq so'ralganda. UI doim `tar.gz` yuboradi. `datasource_id` mavjud bo'lmasa 404. Job egasi = joriy user (`owner_id`, `owner_name`).
+
+`name` — fayl nomi (ixtiyoriy): bo'sh bo'lsa `export` prefix. Server `sanitizeFileName` orqali tozalaydi va doim oxiriga UTC timestamp + format suffix qo'shadi. Misol: `my-prod-logs` → `my-prod-logs_20260521-090655-123.tar.gz`.
 
 **Format implementatsiyasi (worker.go):**
-- `log` — `bufio.Writer` → fayl, streaming
+- `tar.gz` — ikki bosqich: oldin xom faylni `.tmp`'ga yozadi (tar header'i size talab qiladi), keyin `.tar.gz` quradi (ichida `<nom>.log`) va `.tmp`'ni o'chiradi
 - `log.gz` — `bufio.Writer` → `gzip.Writer` → fayl, streaming
-- `tar.gz` — ikki bosqich: oldin xom faylni `.tmp`'ga yozadi (tar header'i size talab qiladi), keyin `.tar.gz` quradi va `.tmp`'ni o'chiradi
+- `log` — `bufio.Writer` → fayl, streaming
 
-Streaming worker (`vlclient.DoLongRunning`'dan oqim) shu uchta yo'lda ham ishlaydi. Job `Size` field — diskdagi yakuniy fayl hajmi (compressed size).
+Streaming `vlclient.DoLongRunning(ctx, ...)` orqali; job o'chirilsa ctx bekor qilinadi. Job `size` — diskdagi yakuniy fayl hajmi.
 
 ### GET `/api/jobs`
-Barcha joblar (filterlamayd, har user hammasini ko'radi). **`CreatedAt` DESC bo'yicha tartiblangan** — eng yangi joblar tepada.
+**Oddiy user faqat o'z joblarini**, admin hammasini ko'radi. `created_at` DESC.
 
 ```json
 [
   {
     "id": "job_...",
+    "owner_id": "user-uuid",
+    "owner_name": "admin",
     "query": "...",
     "datasource_id": "uuid",
     "datasource_name": "Prod VL",
     "status": "running" | "done" | "failed",
-    "file_name": "export_job_...log",
+    "file_name": "export_20260521-090655-123.tar.gz",
     "created_at": "2026-...",
     "error": "",
-    "lines": 12345
+    "lines": 12345,
+    "start": "...", "end": "...", "sort_order": "asc",
+    "format": "tar.gz",
+    "size": 1048576
   }
 ]
 ```
 
 ### DELETE `/api/jobs/{id}`
-In-memory entry + diskdagi fayl o'chadi. Ownership yo'q.
+Owner yoki admin (404 / 403). Running bo'lsa worker to'xtatiladi (`worker.Cancel`), fayl + `.tmp` + share'lar o'chadi, `jobs.json` yangilanadi.
 
 ### GET `/api/jobs/{id}/download`
-`Content-Disposition: attachment` bilan `.log` fayl (`http.ServeFile` orqali streaming). Status `done` emas — 400.
+Owner yoki admin. `Content-Disposition: attachment` bilan fayl (`http.ServeFile`, Range bor). Status `done` emas — 400.
 
-**Auth:** `Authorization: Bearer <jwt>` header standart yo'l. Brauzer `<a href download>` Authorization yubora olmagani sababli, **bu endpoint** uchun `?token=<jwt>` query param ham qabul qilinadi (auth middleware'da `strings.HasSuffix(path, "/download")` tekshiruvi). Boshqa endpointlarda query token ishlamaydi.
+**Auth:** `Authorization: Bearer <jwt>` standart yo'l. Brauzer `<a href download>` Authorization yubora olmagani sababli, **bu endpoint** uchun `?token=<jwt>` query param ham qabul qilinadi (auth middleware'da `strings.HasSuffix(path, "/download")` tekshiruvi).
 
 ## Share links
 
-Public download URL (`/dl/{token}`) auth talab qilmaydi. Boshqa endpointlar (create/get/revoke) auth ostida — har autentifikatsiyalangan foydalanuvchi har qanday job uchun share yaratishi mumkin.
+Public download URL (`/dl/{token}`) auth talab qilmaydi. Create/get/revoke — **job egasi yoki admin** (403 aks holda).
 
 **1 share per job** qoidasi: yangi share yaratilsa, mavjud share avtomatik bekor qilinadi.
 
@@ -172,16 +179,16 @@ Public download URL (`/dl/{token}`) auth talab qilmaydi. Boshqa endpointlar (cre
   "url": "http://server/dl/LmKTeynWiJTEtIiBuakjrw"
 }
 ```
-`expires_at` o'tmishda bo'lsa 400.
+`expires_at` o'tmishda bo'lsa 400. Job `done` emas — 400.
 
 ### GET `/api/jobs/{id}/share`
 Job uchun joriy share ma'lumotini qaytaradi yoki 404.
 
 ### DELETE `/api/jobs/{id}/share`
-Share'ni bekor qiladi. Yo'q bo'lsa 204 qaytadi (idempotent). **E'tibor:** revoke fayl/job'ni o'chirmaydi (faqat link bekor bo'ladi). Limit/expiry yetganda — o'chadi.
+Share'ni bekor qiladi. Yo'q bo'lsa 204 (idempotent). Revoke fayl/job'ni o'chirmaydi (faqat link bekor bo'ladi).
 
 ### GET `/dl/{token}`
-Public download. Auth talab qilmaydi (URL `/api/`'dan tashqarida, middleware avtomatik o'tkazib yuboradi).
+Public download. **Range qo'llab-quvvatlanmaydi** — `Accept-Ranges: none`, `Range` header e'tiborsiz, doim to'liq fayl 200 bilan. Sabab: har HTTP so'rov = bitta yuklab olish; download-manager'larning parallel chunk'lari limitni bir zumda tugatib faylni o'chirardi.
 
 Mantiq (atomik, store mutex ostida):
 1. Token bo'yicha share qidirish; yo'q bo'lsa 404
@@ -189,11 +196,11 @@ Mantiq (atomik, store mutex ostida):
 3. `download_count >= max_downloads` (max > 0) bo'lsa → o'chadi, 410 Gone
 4. Bog'liq job yo'q yoki `done` emas → o'chadi, 404
 5. `download_count++`, persist
-6. Fayl `http.ServeFile` orqali stream qilinadi
+6. Fayl `io.Copy` bilan oqim qilinadi (`Content-Length` bor)
 7. Agar limit yetgan bo'lsa serve qilingandan keyin share+job+fayl o'chiriladi
 
 ### Background cleanup
-Server `time.Ticker(1 * time.Minute)` orqali `s.CleanupExpiredShares()` ni chaqiradi — `expires_at` o'tgan har bir share, uning job va faylini olib tashlaydi.
+Server `time.Ticker(1 * time.Minute)` orqali `s.CleanupExpiredShares()` ni chaqiradi. Startup'da `RecoverJobs` egasiz (job yo'q yoki done emas) share'larni ham olib tashlaydi.
 
 ## Users (admin only)
 
@@ -207,11 +214,10 @@ Parolsiz ro'yxat.
 `role` bo'sh bo'lsa `user`. Mavjud username — 409.
 
 ### PUT `/api/users/{id}`
-Admin only. Body:
 ```json
 { "role": "admin", "password": "newpass" }
 ```
-`role` bo'sh bo'lsa o'zgarmaydi. `password` bo'sh bo'lsa eski parol qoladi (faqat non-empty parol bcrypt qilinib yoziladi). Username immutable. 404 — topilmasa.
+`role` bo'sh bo'lsa o'zgarmaydi. `password` bo'sh bo'lsa eski parol qoladi. Username immutable. 404 — topilmasa. Rol o'zgarishi userning mavjud tokeni bilan keyingi so'rovdan kuchga kiradi.
 
 ### DELETE `/api/users/{id}`
-O'zini o'chirishga ruxsat berilmaydi (400).
+O'zini o'chirishga ruxsat berilmaydi (400). O'chirilgan userning tokeni darhol 401 qaytaradi.

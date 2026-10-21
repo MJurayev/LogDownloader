@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import { api, type UserInfo } from "../api";
+import { useT } from "../i18n";
 import "./Pages.css";
 
 export default function UsersPage() {
+  const { t } = useT();
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -33,7 +35,7 @@ export default function UsersPage() {
       setRole("user");
       loadUsers();
     } catch {
-      setError("Xatolik yuz berdi");
+      setError(t("genericError"));
     }
   };
 
@@ -64,7 +66,7 @@ export default function UsersPage() {
       closeEdit();
       loadUsers();
     } catch {
-      setEditError("Saqlashda xatolik");
+      setEditError(t("saveError"));
     } finally {
       setEditSaving(false);
     }
@@ -72,31 +74,31 @@ export default function UsersPage() {
 
   return (
     <div className="page">
-      <h1>Users</h1>
-      <p className="subtitle">Foydalanuvchilarni boshqarish</p>
+      <h1>{t("usersTitle")}</h1>
+      <p className="subtitle">{t("usersSubtitle")}</p>
 
       <div className="form-group">
         <div className="settings-auth-row">
           <input
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder="Username"
+            placeholder={t("username")}
             className="input"
           />
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
+            placeholder={t("password")}
             className="input"
           />
           <select value={role} onChange={(e) => setRole(e.target.value)} className="input ds-select">
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
+            <option value="user">{t("roleUser")}</option>
+            <option value="admin">{t("roleAdmin")}</option>
           </select>
         </div>
         <button onClick={handleCreate} disabled={!username.trim() || !password.trim()} className="btn btn-primary">
-          Qo'shish
+          {t("addUser")}
         </button>
         {error && <div className="error-text">{error}</div>}
       </div>
@@ -113,10 +115,10 @@ export default function UsersPage() {
               </div>
               <div className="card-actions">
                 <button onClick={() => openEdit(u)} className="btn btn-small btn-outline">
-                  Tahrirlash
+                  {t("edit")}
                 </button>
                 <button onClick={() => handleDelete(u.id)} className="btn btn-small btn-danger">
-                  O'chirish
+                  {t("delete")}
                 </button>
               </div>
             </div>
@@ -127,35 +129,35 @@ export default function UsersPage() {
       {editingUser && (
         <div className="save-modal-overlay" onClick={closeEdit}>
           <div className="save-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Userni tahrirlash</h3>
+            <h3>{t("editUserTitle")}</h3>
             <div className="form-group">
-              <label className="label">Username</label>
+              <label className="label">{t("username")}</label>
               <input value={editingUser.username} className="input" disabled />
             </div>
             <div className="form-group">
-              <label className="label">Role</label>
+              <label className="label">{t("role")}</label>
               <select value={editRole} onChange={(e) => setEditRole(e.target.value)} className="input ds-select">
-                <option value="user">User</option>
-                <option value="admin">Admin</option>
+                <option value="user">{t("roleUser")}</option>
+                <option value="admin">{t("roleAdmin")}</option>
               </select>
             </div>
             <div className="form-group">
-              <label className="label">Yangi parol (bo'sh qoldirilsa o'zgarmaydi)</label>
+              <label className="label">{t("newPasswordLabel")}</label>
               <input
                 type="password"
                 value={editPassword}
                 onChange={(e) => setEditPassword(e.target.value)}
-                placeholder="Yangi parol"
+                placeholder={t("newPasswordPlaceholder")}
                 className="input"
               />
             </div>
             {editError && <div className="error-text">{editError}</div>}
             <div className="save-modal-actions">
               <button onClick={closeEdit} disabled={editSaving} className="btn btn-small btn-outline">
-                Bekor qilish
+                {t("cancel")}
               </button>
               <button onClick={handleEditSave} disabled={editSaving} className="btn btn-small btn-primary">
-                {editSaving ? "..." : "Saqlash"}
+                {editSaving ? "..." : t("save")}
               </button>
             </div>
           </div>

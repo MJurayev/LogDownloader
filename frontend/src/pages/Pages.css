@@ -952,11 +952,26 @@
   padding: 6px 10px;
 }
 
-.export-format-select {
-  width: auto;
+/* Export formati qulflangan (.tar.gz) — tanlash elementi emas, faqat ko'rsatkich */
+.export-format-locked {
   font-size: 12px;
+  font-weight: 600;
   padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--success-soft);
+  color: var(--success-text);
+  white-space: nowrap;
   flex-shrink: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.job-owner {
+  color: var(--warning-text);
+  font-size: 11px;
+  background: var(--warning-soft);
+  padding: 2px 8px;
+  border-radius: 4px;
 }
 
 .job-size {
@@ -1203,6 +1218,7 @@
 }
 
 .login-card {
+  position: relative;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -1211,6 +1227,28 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.login-lang-toggle {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.login-lang-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--accent-text);
+  border-color: var(--accent-soft);
 }
 
 .login-title {

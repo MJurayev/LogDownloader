@@ -223,9 +223,27 @@ func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
 
 // Datasources
 
+// datasourceView — API javobi uchun: basic auth paroli client'ga qaytarilmaydi,
+// o'rniga `has_password` flag beriladi (UI "saqlangan" placeholder ko'rsatadi).
+// Embedded struct'dagi `password` maydonini tashqi (bo'sh, omitempty) maydon bosib ketadi.
+type datasourceView struct {
+	model.Datasource
+	Password    string `json:"password,omitempty"`
+	HasPassword bool   `json:"has_password"`
+}
+
+func toDatasourceView(ds model.Datasource) datasourceView {
+	return datasourceView{Datasource: ds, HasPassword: ds.Password != ""}
+}
+
 func (h *Handler) getDatasources(w http.ResponseWriter, r *http.Request) {
 	u := auth.GetUser(r)
-	writeJSON(w, h.store.GetDatasourcesForUser(u.ID))
+	list := h.store.GetDatasourcesForUser(u.ID)
+	views := make([]datasourceView, 0, len(list))
+	for _, ds := range list {
+		views = append(views, toDatasourceView(ds))
+	}
+	writeJSON(w, views)
 }
 
 func (h *Handler) createDatasource(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +268,7 @@ func (h *Handler) createDatasource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, ds)
+	writeJSON(w, toDatasourceView(ds))
 }
 
 func (h *Handler) updateDatasource(w http.ResponseWriter, r *http.Request) {
@@ -280,6 +298,14 @@ func (h *Handler) updateDatasource(w http.ResponseWriter, r *http.Request) {
 		if input.Global && u.Role != model.RoleAdmin {
 			input.Global = existing.Global
 		}
+		// Parol GET javobida qaytarilmaydi, shuning uchun bo'sh parol =
+		// "o'zgartirilmasin" (username saqlanib qolgan bo'lsa). Username
+		// tozalansa basic auth butunlay o'chadi.
+		if input.Username == "" {
+			input.Password = ""
+		} else if input.Password == "" {
+			input.Password = existing.Password
+		}
 		settings.Datasources[i] = input
 		found = true
 		break
@@ -292,7 +318,7 @@ func (h *Handler) updateDatasource(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, input)
+	writeJSON(w, toDatasourceView(input))
 }
 
 func (h *Handler) deleteDatasource(w http.ResponseWriter, r *http.Request) {
@@ -313,7 +339,10 @@ func (h *Handler) deleteDatasource(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, ds)
 	}
 	settings.Datasources = filtered
-	h.store.SaveSettings(settings)
+	if err := h.store.SaveSettings(settings); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -410,7 +439,28 @@ func (h *Handler) deleteQuery(w http.ResponseWriter, r *http.Request) {
 
 // Export & Jobs
 
+// canAccessJob — job egasi yoki admin.
+func canAccessJob(u *auth.AuthUser, job *model.ExportJob) bool {
+	return u != nil && (u.Role == model.RoleAdmin || job.OwnerID == u.ID)
+}
+
+// loadJobForUser job'ni topadi va ruxsatni tekshiradi; muammo bo'lsa javobni
+// o'zi yozadi va nil qaytaradi.
+func (h *Handler) loadJobForUser(w http.ResponseWriter, r *http.Request, id string) *model.ExportJob {
+	job := h.store.GetJob(id)
+	if job == nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return nil
+	}
+	if !canAccessJob(auth.GetUser(r), job) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return nil
+	}
+	return job
+}
+
 func (h *Handler) startExport(w http.ResponseWriter, r *http.Request) {
+	u := auth.GetUser(r)
 	var req struct {
 		Query        string `json:"query"`
 		DatasourceID string `json:"datasource_id"`
@@ -428,8 +478,23 @@ func (h *Handler) startExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "query and datasource_id are required", http.StatusBadRequest)
 		return
 	}
+	// Datasource foydalanuvchiga ko'rinadigan bo'lishi shart (o'ziniki yoki global).
+	if h.store.GetDatasource(req.DatasourceID) == nil {
+		http.Error(w, "datasource not found", http.StatusNotFound)
+		return
+	}
 
-	jobID := h.worker.StartExport(req.Query, req.DatasourceID, req.Start, req.End, req.SortOrder, req.Name, req.Format)
+	jobID := h.worker.StartExport(worker.ExportParams{
+		Query:        req.Query,
+		DatasourceID: req.DatasourceID,
+		Start:        req.Start,
+		End:          req.End,
+		SortOrder:    req.SortOrder,
+		Name:         req.Name,
+		Format:       req.Format,
+		OwnerID:      u.ID,
+		OwnerName:    u.Username,
+	})
 	writeJSON(w, map[string]string{"job_id": jobID})
 }
 
@@ -446,12 +511,19 @@ func contentTypeForFile(name string) string {
 	}
 }
 
+// getJobs — admin barcha joblarni, oddiy user faqat o'zinikini ko'radi.
 func (h *Handler) getJobs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, h.store.GetJobs())
+	u := auth.GetUser(r)
+	writeJSON(w, h.store.GetJobsForUser(u.ID, u.Role == model.RoleAdmin))
 }
 
+// deleteJob — egasi yoki admin. Running bo'lsa worker to'xtatiladi.
 func (h *Handler) deleteJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if h.loadJobForUser(w, r, id) == nil {
+		return
+	}
+	h.worker.Cancel(id)
 	h.store.DeleteJob(id)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -462,9 +534,8 @@ func (h *Handler) createShare(w http.ResponseWriter, r *http.Request) {
 	u := auth.GetUser(r)
 	jobID := r.PathValue("id")
 
-	job := h.store.GetJob(jobID)
+	job := h.loadJobForUser(w, r, jobID)
 	if job == nil {
-		http.Error(w, "job not found", http.StatusNotFound)
 		return
 	}
 	if job.Status != model.JobDone {
@@ -524,6 +595,9 @@ func (h *Handler) createShare(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getShare(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("id")
+	if h.loadJobForUser(w, r, jobID) == nil {
+		return
+	}
 	share := h.store.GetShareByJob(jobID)
 	if share == nil {
 		http.Error(w, "no share for this job", http.StatusNotFound)
@@ -534,6 +608,9 @@ func (h *Handler) getShare(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) revokeShare(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("id")
+	if h.loadJobForUser(w, r, jobID) == nil {
+		return
+	}
 	share := h.store.GetShareByJob(jobID)
 	if share == nil {
 		w.WriteHeader(http.StatusNoContent)
@@ -546,10 +623,14 @@ func (h *Handler) revokeShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// downloadShare — public yuklab olish. Har bir HTTP so'rov = bitta "yuklab
+// olish", shuning uchun Range qo'llab-quvvatlanmaydi (`Accept-Ranges: none`):
+// aks holda download-manager'larning parallel chunk so'rovlari limitni
+// bir zumda tugatib faylni o'chirib yuborardi.
 func (h *Handler) downloadShare(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 
-	share, filePath, err, exhaustedAfter := h.store.ConsumeShare(token)
+	share, filePath, exhaustedAfter, err := h.store.ConsumeShare(token)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrShareNotFound):
@@ -568,9 +649,24 @@ func (h *Handler) downloadShare(w http.ResponseWriter, r *http.Request) {
 		fileName = job.FileName
 	}
 
+	f, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
 	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
 	w.Header().Set("Content-Type", contentTypeForFile(fileName))
-	http.ServeFile(w, r, filePath)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.Header().Set("Accept-Ranges", "none")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, f)
 
 	if exhaustedAfter {
 		h.store.PurgeShare(token)
@@ -609,9 +705,8 @@ func shareResponse(r *http.Request, sh *model.ShareLink) map[string]any {
 
 func (h *Handler) downloadJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	job := h.store.GetJob(id)
+	job := h.loadJobForUser(w, r, id)
 	if job == nil {
-		http.Error(w, "job not found", http.StatusNotFound)
 		return
 	}
 	if job.Status != model.JobDone {

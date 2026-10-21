@@ -136,3 +136,19 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
+
+/* Til almashtirgich (sidebar + login): UZ / RU, faol til ajratib ko'rsatiladi */
+.lang-opt {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  opacity: 0.55;
+}
+
+.lang-opt.active {
+  opacity: 1;
+  color: var(--accent-text);
+}
+
+.lang-sep {
+  opacity: 0.4;
+}

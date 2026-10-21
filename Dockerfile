@@ -14,6 +14,8 @@ COPY --from=frontend /frontend/dist ./web/dist
 RUN go build -ldflags="-s -w" -o logdownloader ./cmd
 
 FROM alpine:3.20
+# ca-certificates — HTTPS datasource'lar uchun (aks holda x509 unknown authority)
+RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=backend /app/logdownloader .
 EXPOSE 3000

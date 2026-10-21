@@ -1,11 +1,15 @@
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { api, type SavedQuery, type Datasource, type ExportFormat } from "../api";
+import { api, type SavedQuery, type Datasource } from "../api";
+import { useT } from "../i18n";
 import "./Pages.css";
 
 const PAGE_SIZE = 50;
+
+// Export formati qulflangan: har doim .tar.gz ("Avtomatik"). Tanlash imkoni yo'q.
+const EXPORT_FORMAT = "tar.gz" as const;
 
 // Brauzer TZ qisqartmasi (masalan: "GMT+05:00")
 const browserTZ = (() => {
@@ -28,6 +32,7 @@ const fmtLocalTime = (utc: string): string => {
 
 
 export default function LogViewerPage() {
+  const { t } = useT();
   const navigate = useNavigate();
   const [query, setQuery] = useState("*");
   const [datasources, setDatasources] = useState<Datasource[]>([]);
@@ -59,9 +64,9 @@ export default function LogViewerPage() {
   // Sort tartibi (_time bo'yicha). Default: asc — eski loglar yuqorida.
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
-  // Export fayl nomi. Bo'sh bo'lsa default `export_<job_id>.log`.
+  // Export fayl nomi. Bo'sh bo'lsa server default `export_<vaqt>.tar.gz` beradi.
   const [exportFileName, setExportFileName] = useState("");
-  const [exportFormat, setExportFormat] = useState<ExportFormat>("log.gz");
+  const [exporting, setExporting] = useState(false);
 
   // Edit saved query modal
   const [editingQuery, setEditingQuery] = useState<SavedQuery | null>(null);
@@ -123,10 +128,10 @@ export default function LogViewerPage() {
         editQueryGlobal,
       );
       await loadSavedQueries();
-      setEditQueryMsg("Saqlandi!");
+      setEditQueryMsg(t("saved"));
       setTimeout(() => { closeEditQuery(); setEditQuerySaving(false); }, 800);
     } catch {
-      setEditQueryMsg("Xatolik yuz berdi");
+      setEditQueryMsg(t("genericError"));
       setEditQuerySaving(false);
     }
   };
@@ -136,11 +141,11 @@ export default function LogViewerPage() {
     setSavingQuery(true);
     try {
       await api.createQuery(saveName, query, selectedDS, saveGlobal);
-      loadSavedQueries();
-      setSaveMsg("Saqlandi!");
-      setTimeout(() => { setShowSaveModal(false); setSaveMsg(""); setSaveName(""); setSaveGlobal(false); setSavingQuery(false); }, 1000);
+      await loadSavedQueries();
+      setSaveMsg(t("saved"));
+      setTimeout(() => { setShowSaveModal(false); setSaveMsg(""); setSaveName(""); setSaveGlobal(false); setSavingQuery(false); }, 600);
     } catch {
-      setSaveMsg("Xatolik yuz berdi");
+      setSaveMsg(t("genericError"));
       setSavingQuery(false);
     }
   };
@@ -158,7 +163,7 @@ export default function LogViewerPage() {
     setTimeEnd(null);
   };
 
-  const fetchLogs = async (pageNum: number) => {
+  const fetchLogs = async (pageNum: number, order: "asc" | "desc" = sortOrder) => {
     setLoading(true);
     setError("");
     try {
@@ -169,7 +174,7 @@ export default function LogViewerPage() {
         pageNum * PAGE_SIZE,
         toISO(timeStart),
         toISO(timeEnd),
-        sortOrder,
+        order,
       );
       setLogs(res.logs || []);
       setHasMore(res.has_more);
@@ -178,7 +183,7 @@ export default function LogViewerPage() {
       setSearched(true);
       setExpandedRow(null);
     } catch (err) {
-      setError(typeof err === "string" ? err : "So'rov xatosi");
+      setError(typeof err === "string" ? err : t("queryError"));
       setLogs([]);
     } finally {
       setLoading(false);
@@ -191,32 +196,20 @@ export default function LogViewerPage() {
     const next: "asc" | "desc" = sortOrder === "asc" ? "desc" : "asc";
     setSortOrder(next);
     // Agar qidiruv allaqachon bajarilgan bo'lsa, yangi tartibda birinchi page'ni qayta yuklash.
-    if (searched) {
-      (async () => {
-        setLoading(true);
-        setError("");
-        try {
-          const res = await api.queryLogs(
-            query,
-            selectedDS,
-            PAGE_SIZE,
-            0,
-            toISO(timeStart),
-            toISO(timeEnd),
-            next,
-          );
-          setLogs(res.logs || []);
-          setHasMore(res.has_more);
-          setTotal(res.total);
-          setPage(0);
-          setExpandedRow(null);
-        } catch (err) {
-          setError(typeof err === "string" ? err : "So'rov xatosi");
-          setLogs([]);
-        } finally {
-          setLoading(false);
-        }
-      })();
+    if (searched) fetchLogs(0, next);
+  };
+
+  const handleExport = async () => {
+    if (!query.trim() || !selectedDS || exporting) return;
+    setExporting(true);
+    try {
+      await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), sortOrder, exportFileName, EXPORT_FORMAT);
+      setExportFileName("");
+      navigate("/jobs");
+    } catch {
+      setError(t("genericError"));
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -245,9 +238,9 @@ export default function LogViewerPage() {
     <div className="log-viewer-layout">
       {/* Saved Queries Panel */}
       <div className="sq-panel">
-        <div className="sq-panel-header">Saved Queries</div>
+        <div className="sq-panel-header">{t("savedQueries")}</div>
         {savedQueries.length === 0 ? (
-          <div className="sq-empty">Querylar yo'q</div>
+          <div className="sq-empty">{t("noQueries")}</div>
         ) : (
           <div className="sq-list">
             {savedQueries.map((sq) => (
@@ -262,14 +255,14 @@ export default function LogViewerPage() {
                   <button
                     className="sq-item-edit"
                     onClick={(e) => { e.stopPropagation(); openEditQuery(sq); }}
-                    title="Tahrirlash"
+                    title={t("edit")}
                   >
                     ✎
                   </button>
                   <button
                     className="sq-item-delete"
                     onClick={(e) => { e.stopPropagation(); handleDeleteQuery(sq.id); }}
-                    title="O'chirish"
+                    title={t("delete")}
                   >
                     &times;
                   </button>
@@ -282,14 +275,14 @@ export default function LogViewerPage() {
 
       {/* Main Viewer */}
       <div className="page log-viewer">
-        <h1>Log Viewer</h1>
-        <p className="subtitle">LogsQL query yozing va loglarni ko'ring</p>
+        <h1>{t("lvTitle")}</h1>
+        <p className="subtitle">{t("lvSubtitle")}</p>
 
         <div className="viewer-controls">
           <div className="time-range-row">
             <div className="time-range-inputs">
               <div className="time-range-field">
-                <label className="filter-label">From</label>
+                <label className="filter-label">{t("from")}</label>
                 <DatePicker
                   selected={timeStart}
                   onChange={(d: Date | null) => setTimeStart(d)}
@@ -301,14 +294,14 @@ export default function LogViewerPage() {
                   timeIntervals={5}
                   timeFormat="HH:mm"
                   dateFormat="yyyy-MM-dd HH:mm"
-                  placeholderText="Hammasi (cheksiz)"
+                  placeholderText={t("fromPlaceholder")}
                   isClearable
                   className="input time-input"
                   popperClassName="time-popper"
                 />
               </div>
               <div className="time-range-field">
-                <label className="filter-label">To</label>
+                <label className="filter-label">{t("to")}</label>
                 <DatePicker
                   selected={timeEnd}
                   onChange={(d: Date | null) => setTimeEnd(d)}
@@ -320,7 +313,7 @@ export default function LogViewerPage() {
                   timeIntervals={5}
                   timeFormat="HH:mm"
                   dateFormat="yyyy-MM-dd HH:mm"
-                  placeholderText="Hammasi (hozirgacha)"
+                  placeholderText={t("toPlaceholder")}
                   isClearable
                   className="input time-input"
                   popperClassName="time-popper"
@@ -337,17 +330,17 @@ export default function LogViewerPage() {
                 className="btn btn-small btn-outline"
                 onClick={clearTimeRange}
                 disabled={!timeStart && !timeEnd}
-                title="Vaqt cheklovini olib tashlash (barcha loglar)"
+                title={t("presetAllTitle")}
               >
-                Hammasi
+                {t("presetAll")}
               </button>
             </div>
           </div>
           <div className="time-tz-hint">
-            Mahalliy vaqt ({browserTZ}) — server'ga UTC'da yuboriladi. Jadvaldagi <code>_time</code> ham mahalliyga aylantirilgan (asl UTC qiymat tooltip'da).
+            {t("tzHint", { tz: browserTZ })}
           </div>
           <div className="ds-selector">
-            <label className="filter-label">Datasource</label>
+            <label className="filter-label">{t("datasource")}</label>
             {datasources.length > 0 ? (
               <select
                 value={selectedDS}
@@ -359,7 +352,7 @@ export default function LogViewerPage() {
                 ))}
               </select>
             ) : (
-              <span className="ds-empty-hint">Settings dan datasource qo'shing</span>
+              <span className="ds-empty-hint">{t("noDatasourceHint")}</span>
             )}
           </div>
           <div className="viewer-query-row">
@@ -367,7 +360,7 @@ export default function LogViewerPage() {
               value={query}
               onChange={(e) => { setQuery(e.target.value); setActiveQueryId(null); }}
               onKeyDown={handleKeyDown}
-              placeholder='Masalan: level:"error" AND service:"api-gateway"'
+              placeholder={t("queryPlaceholder")}
               rows={2}
               className="query-input viewer-query"
             />
@@ -376,7 +369,7 @@ export default function LogViewerPage() {
               disabled={loading || !query.trim()}
               className="btn btn-primary btn-search"
             >
-              {loading ? "..." : "Search"}
+              {loading ? "..." : t("search")}
             </button>
           </div>
           <div className="viewer-secondary-actions">
@@ -385,54 +378,42 @@ export default function LogViewerPage() {
               disabled={!query.trim()}
               className="btn btn-small btn-outline"
             >
-              Save Query
+              {t("saveQuery")}
             </button>
             <input
               value={exportFileName}
               onChange={(e) => setExportFileName(e.target.value)}
-              placeholder="Fayl nomi (ixtiyoriy)"
+              placeholder={t("fileNamePlaceholder")}
               className="input export-filename-input"
             />
-            <select
-              value={exportFormat}
-              onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
-              className="input export-format-select"
-              title="Export formati"
-            >
-              <option value="log.gz">.log.gz</option>
-              <option value="log">.log (xom)</option>
-              <option value="tar.gz">.tar.gz</option>
-            </select>
+            <span className="export-format-locked" title={t("exportFormatLockedTitle")}>
+              {t("exportFormatLocked")}
+            </span>
             <button
-              onClick={async () => {
-                if (!query.trim() || !selectedDS) return;
-                await api.startExport(query, selectedDS, toISO(timeStart), toISO(timeEnd), sortOrder, exportFileName, exportFormat);
-                setExportFileName("");
-                navigate("/jobs");
-              }}
-              disabled={!query.trim() || !selectedDS}
+              onClick={handleExport}
+              disabled={!query.trim() || !selectedDS || exporting}
               className="btn btn-small btn-export-action"
             >
-              Export
+              {exporting ? "..." : t("export")}
             </button>
           </div>
 
           {editingQuery && (
             <div className="save-modal-overlay" onClick={closeEditQuery}>
               <div className="save-modal" onClick={(e) => e.stopPropagation()}>
-                <h3>Queryni tahrirlash</h3>
+                <h3>{t("editQueryTitle")}</h3>
                 <div className="form-group">
-                  <label className="label">Nomi</label>
+                  <label className="label">{t("name")}</label>
                   <input
                     value={editQueryName}
                     onChange={(e) => setEditQueryName(e.target.value)}
-                    placeholder="Query nomi"
+                    placeholder={t("queryNamePlaceholder")}
                     className="input"
                     autoFocus
                   />
                 </div>
                 <div className="form-group">
-                  <label className="label">Query</label>
+                  <label className="label">{t("query")}</label>
                   <textarea
                     value={editQueryText}
                     onChange={(e) => setEditQueryText(e.target.value)}
@@ -442,13 +423,13 @@ export default function LogViewerPage() {
                 </div>
                 {datasources.length > 0 && (
                   <div className="form-group">
-                    <label className="label">Datasource</label>
+                    <label className="label">{t("datasource")}</label>
                     <select
                       value={editQueryDS}
                       onChange={(e) => setEditQueryDS(e.target.value)}
                       className="input ds-select"
                     >
-                      <option value="">— tanlanmagan —</option>
+                      <option value="">{t("dsNotSelected")}</option>
                       {datasources.map((ds) => (
                         <option key={ds.id} value={ds.id}>{ds.name || ds.url}</option>
                       ))}
@@ -462,19 +443,19 @@ export default function LogViewerPage() {
                       checked={editQueryGlobal}
                       onChange={(e) => setEditQueryGlobal(e.target.checked)}
                     />
-                    Global (barcha userlarga ko'rinadi)
+                    {t("globalHint")}
                   </label>
                 )}
                 <div className="save-modal-actions">
                   <button onClick={closeEditQuery} disabled={editQuerySaving} className="btn btn-small btn-outline">
-                    Bekor qilish
+                    {t("cancel")}
                   </button>
                   <button
                     onClick={handleUpdateQuery}
                     disabled={editQuerySaving || !editQueryName.trim() || !editQueryText.trim()}
                     className="btn btn-small btn-primary"
                   >
-                    {editQuerySaving ? "..." : "Saqlash"}
+                    {editQuerySaving ? "..." : t("save")}
                   </button>
                 </div>
                 {editQueryMsg && <div className="save-modal-msg">{editQueryMsg}</div>}
@@ -485,12 +466,12 @@ export default function LogViewerPage() {
           {showSaveModal && (
             <div className="save-modal-overlay" onClick={() => setShowSaveModal(false)}>
               <div className="save-modal" onClick={(e) => e.stopPropagation()}>
-                <h3>Query saqlash</h3>
+                <h3>{t("saveQueryTitle")}</h3>
                 <code className="save-modal-query">{query}</code>
                 <input
                   value={saveName}
                   onChange={(e) => setSaveName(e.target.value)}
-                  placeholder="Query nomi"
+                  placeholder={t("queryNamePlaceholder")}
                   className="input"
                   autoFocus
                   onKeyDown={(e) => { if (e.key === "Enter") handleSaveQuery(); }}
@@ -498,15 +479,15 @@ export default function LogViewerPage() {
                 {isAdmin && (
                   <label className="global-check">
                     <input type="checkbox" checked={saveGlobal} onChange={(e) => setSaveGlobal(e.target.checked)} />
-                    Global (barcha userlarga ko'rinadi)
+                    {t("globalHint")}
                   </label>
                 )}
                 <div className="save-modal-actions">
                   <button onClick={() => setShowSaveModal(false)} disabled={savingQuery} className="btn btn-small btn-outline">
-                    Bekor qilish
+                    {t("cancel")}
                   </button>
                   <button onClick={handleSaveQuery} disabled={savingQuery || !saveName.trim()} className="btn btn-small btn-primary">
-                    {savingQuery ? "..." : "Saqlash"}
+                    {savingQuery ? "..." : t("save")}
                   </button>
                 </div>
                 {saveMsg && <div className="save-modal-msg">{saveMsg}</div>}
@@ -520,9 +501,9 @@ export default function LogViewerPage() {
         {searched && !error && (
           <>
             <div className="viewer-info">
-              <span>{total} ta log topildi{hasMore ? "+" : ""}</span>
+              <span>{t("logsFound", { n: total })}{hasMore ? "+" : ""}</span>
               <span className="viewer-page-info">
-                Sahifa {page + 1} ({page * PAGE_SIZE + 1}-{page * PAGE_SIZE + logs.length})
+                {t("page", { n: page + 1 })} ({page * PAGE_SIZE + 1}-{page * PAGE_SIZE + logs.length})
               </span>
             </div>
 
@@ -538,7 +519,7 @@ export default function LogViewerPage() {
                               type="button"
                               className="th-sort-btn"
                               onClick={toggleSortOrder}
-                              title={`_time bo'yicha ${sortOrder === "asc" ? "kamayish" : "o'sish"} tartibida saralash`}
+                              title={sortOrder === "asc" ? t("sortDescTitle") : t("sortAscTitle")}
                             >
                               {col} <span className="th-sort-arrow">{sortOrder === "asc" ? "▲" : "▼"}</span>
                             </button>
@@ -549,9 +530,8 @@ export default function LogViewerPage() {
                   </thead>
                   <tbody>
                     {logs.map((log, i) => (
-                      <>
+                      <Fragment key={i}>
                         <tr
-                          key={i}
                           className={`log-row ${expandedRow === i ? "expanded" : ""} ${log.level === "error" ? "log-error" : log.level === "warn" ? "log-warn" : ""}`}
                           onClick={() => setExpandedRow(expandedRow === i ? null : i)}
                         >
@@ -568,19 +548,19 @@ export default function LogViewerPage() {
                           ))}
                         </tr>
                         {expandedRow === i && (
-                          <tr key={`${i}-detail`} className="log-detail-row">
+                          <tr className="log-detail-row">
                             <td colSpan={columns.length}>
                               <pre className="log-detail">{JSON.stringify(log, null, 2)}</pre>
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
               </div>
             ) : (
-              <p className="empty">Hech qanday log topilmadi</p>
+              <p className="empty">{t("noLogs")}</p>
             )}
 
             <div className="pagination">
@@ -589,15 +569,15 @@ export default function LogViewerPage() {
                 disabled={page === 0 || loading}
                 className="btn btn-small btn-outline"
               >
-                Oldingi
+                {t("prev")}
               </button>
-              <span className="page-num">Sahifa {page + 1}</span>
+              <span className="page-num">{t("page", { n: page + 1 })}</span>
               <button
                 onClick={() => fetchLogs(page + 1)}
                 disabled={!hasMore || loading}
                 className="btn btn-small btn-outline"
               >
-                Keyingi
+                {t("next")}
               </button>
             </div>
           </>
