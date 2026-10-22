@@ -1660,3 +1660,18 @@
 .audit-login { background: var(--success-soft); color: var(--success-text); }
 .audit-export, .audit-job, .audit-share { background: var(--accent-soft); color: var(--accent-text); }
 .audit-user, .audit-settings, .audit-datasource { background: var(--warning-soft); color: var(--warning-text); }
+
+/* ===== v0.6.1: UI tuzatishlar — chap panel kengligi/scroll, ixcham export sozlamalari ===== */
+.sq-panel { width: 300px; }
+.fields-panel { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 12px; }
+.field-name { align-items: flex-start; }
+.field-label, .field-value-text { white-space: normal; word-break: break-all; line-height: 1.3; }
+.field-chevron { margin-top: 1px; }
+.btn-search { align-self: center; padding: 10px 20px; }
+.export-options-grid { align-items: start; }
+.export-options-grid .form-group { margin-bottom: 0; gap: 6px; }
+.export-options-grid .label { font-size: 11px; }
+.export-options-grid .input { padding: 7px 12px; font-size: 13px; border-radius: 8px; width: 100%; box-sizing: border-box; }
+.export-options-grid .ds-select { flex: 0 0 auto; max-width: none; }
+.export-options-grid .export-checks { gap: 8px; padding-top: 22px; }
+.export-options-grid .global-check { font-size: 12px; margin: 0; }
