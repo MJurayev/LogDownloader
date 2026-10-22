@@ -11,13 +11,19 @@ import (
 	"logdownloader/internal/auth"
 	"logdownloader/internal/config"
 	"logdownloader/internal/handler"
+	"logdownloader/internal/metrics"
 	"logdownloader/internal/model"
+	"logdownloader/internal/notify"
+	"logdownloader/internal/scheduler"
 	"logdownloader/internal/store"
 	"logdownloader/internal/worker"
 	"logdownloader/web"
 
 	"github.com/google/uuid"
 )
+
+// version — build paytida `-ldflags "-X main.version=..."` bilan beriladi.
+var version = "dev"
 
 func main() {
 	cfg := config.Load()
@@ -52,17 +58,22 @@ func main() {
 		log.Println("Created default admin user (admin/admin)")
 	}
 
-	w := worker.New(s, int64(cfg.ExportChunkMB)*1024*1024)
-	h := handler.New(s, w)
+	notifier := notify.New(s)
+	w := worker.New(s, int64(cfg.ExportChunkMB)*1024*1024, notifier)
+	w.Start()
 	if cfg.ExportChunkMB > 0 {
-		log.Printf("Export auto-chunking: %d MB per part inside .tar.gz", cfg.ExportChunkMB)
+		log.Printf("Export auto-chunking: %d MB per part inside .tar.gz; max concurrent exports: %d", cfg.ExportChunkMB, s.MaxConcurrent())
 	} else {
-		log.Println("Export auto-chunking disabled (export_chunk_mb=0)")
+		log.Printf("Export auto-chunking disabled (export_chunk_mb=0); max concurrent exports: %d", s.MaxConcurrent())
 	}
 
-	// Vaqti chiqqan share linklarni davriy ravishda tozalash (har 1 daqiqada).
-	// Ravon (on-access) tekshiruv handler ichida ham bor, lekin foydalanuvchi
-	// kelmasa ham fayllar tozalanishi kerak.
+	sched := scheduler.New(s, w)
+	sched.Start()
+
+	h := handler.New(s, w, notifier, sched, version)
+	h.SetExportChunkMB(cfg.ExportChunkMB)
+
+	// Fon ishlari: vaqti chiqqan share'lar (har 1 daqiqa) va retention (har 10 daqiqa).
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
@@ -70,6 +81,21 @@ func main() {
 			if n := s.CleanupExpiredShares(); n > 0 {
 				log.Printf("Cleaned up %d expired share(s)", n)
 			}
+		}
+	}()
+	go func() {
+		run := func() {
+			st := s.GetSettings()
+			quota := int64(st.Retention.QuotaGB * 1024 * 1024 * 1024)
+			if n := s.PruneExports(st.Retention.Days, quota); n > 0 {
+				log.Printf("Retention: removed %d export job(s) (days=%d quota=%.1fGB)", n, st.Retention.Days, st.Retention.QuotaGB)
+			}
+		}
+		run()
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
 		}
 	}()
 
@@ -93,15 +119,15 @@ func main() {
 		fileServer.ServeHTTP(rw, r)
 	})
 
-	// Auth middleware wraps CORS. User har so'rovda store'dan qayta o'qiladi —
-	// o'chirilgan user tokeni darhol yaroqsiz, rol o'zgarishi darhol kuchga kiradi.
-	wrapped := corsMiddleware(auth.Middleware(mux, s.GetUser))
+	// Middleware zanjiri: metrics → CORS → auth. User har so'rovda store'dan
+	// qayta o'qiladi — o'chirilgan user tokeni darhol yaroqsiz.
+	wrapped := metrics.HTTPMiddleware(corsMiddleware(auth.Middleware(mux, s.GetUser)))
 
 	listenAddr := cfg.Host + ":" + cfg.Port
 	if cfg.Host == "" {
-		fmt.Printf("LogDownloader listening on %s (all interfaces)\n", listenAddr)
+		fmt.Printf("LogDownloader %s listening on %s (all interfaces)\n", version, listenAddr)
 	} else {
-		fmt.Printf("LogDownloader listening on http://%s:%s\n", cfg.Host, cfg.Port)
+		fmt.Printf("LogDownloader %s listening on http://%s:%s\n", version, cfg.Host, cfg.Port)
 	}
 	log.Fatal(http.ListenAndServe(listenAddr, wrapped))
 }

@@ -11,7 +11,8 @@ COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ .
 COPY --from=frontend /frontend/dist ./web/dist
-RUN go build -ldflags="-s -w" -o logdownloader ./cmd
+ARG VERSION=docker
+RUN go build -ldflags="-s -w -X main.version=${VERSION}" -o logdownloader ./cmd
 
 FROM alpine:3.20
 # ca-certificates — HTTPS datasource'lar uchun (aks holda x509 unknown authority)

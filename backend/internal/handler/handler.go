@@ -1,102 +1,200 @@
+// Package handler — barcha HTTP endpointlar. Fayllar bo'yicha:
+// handler.go (auth, users, profil), datasources.go, queries.go, logs.go
+// (viewer proxy'lari), jobs.go, shares.go, schedules.go, admin.go (audit,
+// sozlamalar), system.go (healthz, metrics).
 package handler
 
 import (
-	"bufio"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"logdownloader/internal/auth"
+	"logdownloader/internal/metrics"
 	"logdownloader/internal/model"
+	"logdownloader/internal/notify"
+	"logdownloader/internal/scheduler"
 	"logdownloader/internal/store"
-	"logdownloader/internal/vlclient"
 	"logdownloader/internal/worker"
 
 	"github.com/google/uuid"
 )
 
 type Handler struct {
-	store  *store.Store
-	worker *worker.Worker
+	store     *store.Store
+	worker    *worker.Worker
+	notifier  *notify.Notifier
+	scheduler *scheduler.Scheduler
+	limiter   *auth.Limiter
+	version   string
+
+	exportChunkMB int
 }
 
-func New(s *store.Store, w *worker.Worker) *Handler {
-	return &Handler{store: s, worker: w}
+func New(s *store.Store, w *worker.Worker, n *notify.Notifier, sc *scheduler.Scheduler, version string) *Handler {
+	return &Handler{store: s, worker: w, notifier: n, scheduler: sc, limiter: auth.NewLimiter(), version: version}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	// Auth
+	// Auth / profil
 	mux.HandleFunc("POST /api/login", h.login)
 	mux.HandleFunc("GET /api/me", h.me)
+	mux.HandleFunc("PUT /api/me", h.updateMe)
 
-	// Settings / Datasources
+	// Datasources
 	mux.HandleFunc("GET /api/datasources", h.getDatasources)
 	mux.HandleFunc("POST /api/datasources", h.createDatasource)
+	mux.HandleFunc("POST /api/datasources/test", h.testDatasource)
 	mux.HandleFunc("PUT /api/datasources/{id}", h.updateDatasource)
 	mux.HandleFunc("DELETE /api/datasources/{id}", h.deleteDatasource)
 
-	// Queries
+	// Saved queries
 	mux.HandleFunc("GET /api/queries", h.getQueries)
 	mux.HandleFunc("POST /api/queries", h.createQuery)
 	mux.HandleFunc("PUT /api/queries/{id}", h.updateQuery)
 	mux.HandleFunc("DELETE /api/queries/{id}", h.deleteQuery)
 
-	// Log query & export
+	// Log viewer (VictoriaLogs proxy)
 	mux.HandleFunc("GET /api/query", h.queryLogs)
+	mux.HandleFunc("GET /api/fields", h.fieldNames)
+	mux.HandleFunc("GET /api/field_values", h.fieldValues)
+	mux.HandleFunc("GET /api/streams", h.streams)
+	mux.HandleFunc("GET /api/hits", h.hits)
+	mux.HandleFunc("GET /api/tail", h.tail)
+	mux.HandleFunc("GET /api/history", h.getHistory)
+	mux.HandleFunc("DELETE /api/history", h.clearHistory)
+
+	// Export & jobs
 	mux.HandleFunc("POST /api/export", h.startExport)
 	mux.HandleFunc("GET /api/jobs", h.getJobs)
 	mux.HandleFunc("DELETE /api/jobs/{id}", h.deleteJob)
 	mux.HandleFunc("GET /api/jobs/{id}/download", h.downloadJob)
+	mux.HandleFunc("POST /api/jobs/{id}/download-token", h.downloadToken)
+	mux.HandleFunc("GET /api/stats", h.stats)
 
 	// Share links
 	mux.HandleFunc("POST /api/jobs/{id}/share", h.createShare)
 	mux.HandleFunc("GET /api/jobs/{id}/share", h.getShare)
 	mux.HandleFunc("DELETE /api/jobs/{id}/share", h.revokeShare)
-	// Public download — `/dl/...` /api/ prefiksiga kirmaydi, shu sababli auth
-	// middleware uni avtomatik o'tkazib yuboradi.
+	// Public download — `/dl/...` /api/ prefiksiga kirmaydi, auth middleware o'tkazib yuboradi.
 	mux.HandleFunc("GET /dl/{token}", h.downloadShare)
+	mux.HandleFunc("GET /dl/{token}/{n}", h.downloadShare)
 
-	// User management (admin only)
+	// Schedules
+	mux.HandleFunc("GET /api/schedules", h.getSchedules)
+	mux.HandleFunc("POST /api/schedules", h.createSchedule)
+	mux.HandleFunc("PUT /api/schedules/{id}", h.updateSchedule)
+	mux.HandleFunc("DELETE /api/schedules/{id}", h.deleteSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/run", h.runSchedule)
+
+	// Admin
 	mux.HandleFunc("GET /api/users", auth.RequireAdmin(h.getUsers))
 	mux.HandleFunc("POST /api/users", auth.RequireAdmin(h.createUser))
 	mux.HandleFunc("PUT /api/users/{id}", auth.RequireAdmin(h.updateUser))
 	mux.HandleFunc("DELETE /api/users/{id}", auth.RequireAdmin(h.deleteUser))
+	mux.HandleFunc("GET /api/audit", auth.RequireAdmin(h.getAudit))
+	mux.HandleFunc("GET /api/audit/download", auth.RequireAdmin(h.downloadAudit))
+	mux.HandleFunc("GET /api/settings", auth.RequireAdmin(h.getSettings))
+	mux.HandleFunc("PUT /api/settings", auth.RequireAdmin(h.updateSettings))
+	mux.HandleFunc("POST /api/settings/notify/test", auth.RequireAdmin(h.testNotify))
+
+	// System (auth'siz)
+	mux.HandleFunc("GET /healthz", h.healthz)
+	mux.HandleFunc("GET /readyz", h.healthz)
+	mux.HandleFunc("GET /metrics", metrics.Handler(h.metricsSnapshot))
+}
+
+// Helpers
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// audit — joriy user (bo'lsa) bilan audit yozuvi.
+func (h *Handler) audit(r *http.Request, action, target, details string) {
+	e := model.AuditEntry{Time: time.Now(), Action: action, Target: target, IP: auth.ClientIP(r), Details: details}
+	if u := auth.GetUser(r); u != nil {
+		e.UserID = u.ID
+		e.User = u.Username
+	}
+	h.store.Audit(e)
+}
+
+func userView(u model.User) map[string]any {
+	return map[string]any{
+		"id":               u.ID,
+		"username":         u.Username,
+		"role":             u.Role,
+		"email":            u.Email,
+		"telegram_chat_id": u.TelegramChatID,
+		"notify_on_done":   u.NotifyOnDone,
+	}
 }
 
 // Auth
 
+const (
+	loginIPWindow      = time.Minute
+	loginIPMax         = 30
+	loginFailWindow    = 15 * time.Minute
+	loginFailMax       = 5
+	loginBlockedMsg    = "too many failed attempts, try again later"
+	loginRateLimitMsg  = "too many requests"
+	retryAfterSeconds  = "900"
+	retryAfterIPSecond = "60"
+)
+
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	ip := auth.ClientIP(r)
+	if h.limiter.Hit("ip:"+ip, loginIPWindow) > loginIPMax {
+		metrics.LoginBlocked.Add(1)
+		w.Header().Set("Retry-After", retryAfterIPSecond)
+		http.Error(w, loginRateLimitMsg, http.StatusTooManyRequests)
+		return
+	}
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !decode(w, r, &req) {
+		return
+	}
+	failKey := "fail:" + strings.ToLower(req.Username) + "|" + ip
+	if h.limiter.Count(failKey, loginFailWindow) >= loginFailMax {
+		metrics.LoginBlocked.Add(1)
+		h.store.Audit(model.AuditEntry{Action: "login.blocked", User: req.Username, IP: ip})
+		w.Header().Set("Retry-After", retryAfterSeconds)
+		http.Error(w, loginBlockedMsg, http.StatusTooManyRequests)
 		return
 	}
 
 	user := h.store.GetUserByUsername(req.Username)
 	if user == nil || !auth.CheckPassword(user.Password, req.Password) {
+		h.limiter.Hit(failKey, loginFailWindow)
+		metrics.LoginFailed.Add(1)
+		h.store.Audit(model.AuditEntry{Action: "login.fail", User: req.Username, IP: ip})
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	h.limiter.Reset(failKey)
 
 	token, err := auth.GenerateToken(*user)
 	if err != nil {
 		http.Error(w, "token generation failed", http.StatusInternalServerError)
 		return
 	}
-
+	h.store.Audit(model.AuditEntry{Action: "login.ok", UserID: user.ID, User: user.Username, IP: ip})
 	writeJSON(w, map[string]any{
 		"token":    token,
 		"user_id":  user.ID,
@@ -111,21 +209,85 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	full := h.store.GetUser(u.ID)
+	if full == nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
 	writeJSON(w, map[string]any{
-		"user_id":  u.ID,
-		"username": u.Username,
-		"role":     u.Role,
+		"user_id":          full.ID,
+		"username":         full.Username,
+		"role":             full.Role,
+		"email":            full.Email,
+		"telegram_chat_id": full.TelegramChatID,
+		"notify_on_done":   full.NotifyOnDone,
 	})
+}
+
+// updateMe — profil (bildirishnoma manzillari) va o'z parolini o'zgartirish.
+func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
+	u := auth.GetUser(r)
+	var req struct {
+		Email           *string `json:"email"`
+		TelegramChatID  *string `json:"telegram_chat_id"`
+		NotifyOnDone    *bool   `json:"notify_on_done"`
+		CurrentPassword string  `json:"current_password"`
+		NewPassword     string  `json:"new_password"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	user := h.store.GetUser(u.ID)
+	if user == nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+	if req.Email != nil {
+		user.Email = strings.TrimSpace(*req.Email)
+	}
+	if req.TelegramChatID != nil {
+		user.TelegramChatID = strings.TrimSpace(*req.TelegramChatID)
+	}
+	if req.NotifyOnDone != nil {
+		user.NotifyOnDone = *req.NotifyOnDone
+	}
+	changedPassword := false
+	if req.NewPassword != "" {
+		if !auth.CheckPassword(user.Password, req.CurrentPassword) {
+			http.Error(w, "current password is wrong", http.StatusForbidden)
+			return
+		}
+		if len(req.NewPassword) < 6 {
+			http.Error(w, "password must be at least 6 characters", http.StatusBadRequest)
+			return
+		}
+		hash, err := auth.HashPassword(req.NewPassword)
+		if err != nil {
+			http.Error(w, "failed to hash password", http.StatusInternalServerError)
+			return
+		}
+		user.Password = hash
+		changedPassword = true
+	}
+	if err := h.store.SaveUser(*user); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if changedPassword {
+		h.audit(r, "password.change", user.Username, "")
+	} else {
+		h.audit(r, "profile.update", user.Username, "")
+	}
+	writeJSON(w, userView(*user))
 }
 
 // Users (admin only)
 
 func (h *Handler) getUsers(w http.ResponseWriter, r *http.Request) {
 	users := h.store.GetUsers()
-	// Strip passwords
-	safe := make([]map[string]any, len(users))
-	for i, u := range users {
-		safe[i] = map[string]any{"id": u.ID, "username": u.Username, "role": u.Role}
+	safe := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		safe = append(safe, userView(u))
 	}
 	writeJSON(w, safe)
 }
@@ -135,11 +297,12 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 		Username string     `json:"username"`
 		Password string     `json:"password"`
 		Role     model.Role `json:"role"`
+		Email    string     `json:"email"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !decode(w, r, &req) {
 		return
 	}
+	req.Username = strings.TrimSpace(req.Username)
 	if req.Username == "" || req.Password == "" {
 		http.Error(w, "username and password required", http.StatusBadRequest)
 		return
@@ -147,31 +310,23 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "" {
 		req.Role = model.RoleUser
 	}
-
 	if existing := h.store.GetUserByUsername(req.Username); existing != nil {
 		http.Error(w, "username already exists", http.StatusConflict)
 		return
 	}
-
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		http.Error(w, "failed to hash password", http.StatusInternalServerError)
 		return
 	}
-
-	user := model.User{
-		ID:       uuid.NewString(),
-		Username: req.Username,
-		Password: hash,
-		Role:     req.Role,
-	}
+	user := model.User{ID: uuid.NewString(), Username: req.Username, Password: hash, Role: req.Role, Email: strings.TrimSpace(req.Email)}
 	if err := h.store.SaveUser(user); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
+	h.audit(r, "user.create", user.Username, string(user.Role))
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]any{"id": user.ID, "username": user.Username, "role": user.Role})
+	writeJSON(w, userView(user))
 }
 
 func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -179,20 +334,20 @@ func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Role     model.Role `json:"role"`
 		Password string     `json:"password"`
+		Email    *string    `json:"email"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !decode(w, r, &req) {
 		return
 	}
-
 	user := h.store.GetUser(id)
 	if user == nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
-
-	if req.Role != "" {
+	details := []string{}
+	if req.Role != "" && req.Role != user.Role {
 		user.Role = req.Role
+		details = append(details, "role="+string(req.Role))
 	}
 	if req.Password != "" {
 		hash, err := auth.HashPassword(req.Password)
@@ -201,13 +356,17 @@ func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user.Password = hash
+		details = append(details, "password")
 	}
-
+	if req.Email != nil {
+		user.Email = strings.TrimSpace(*req.Email)
+	}
 	if err := h.store.SaveUser(*user); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"id": user.ID, "username": user.Username, "role": user.Role})
+	h.audit(r, "user.update", user.Username, strings.Join(details, ","))
+	writeJSON(w, userView(*user))
 }
 
 func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
@@ -217,610 +376,15 @@ func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot delete yourself", http.StatusBadRequest)
 		return
 	}
-	h.store.DeleteUser(id)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// Datasources
-
-// datasourceView — API javobi uchun: basic auth paroli client'ga qaytarilmaydi,
-// o'rniga `has_password` flag beriladi (UI "saqlangan" placeholder ko'rsatadi).
-// Embedded struct'dagi `password` maydonini tashqi (bo'sh, omitempty) maydon bosib ketadi.
-type datasourceView struct {
-	model.Datasource
-	Password    string `json:"password,omitempty"`
-	HasPassword bool   `json:"has_password"`
-}
-
-func toDatasourceView(ds model.Datasource) datasourceView {
-	return datasourceView{Datasource: ds, HasPassword: ds.Password != ""}
-}
-
-func (h *Handler) getDatasources(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	list := h.store.GetDatasourcesForUser(u.ID)
-	views := make([]datasourceView, 0, len(list))
-	for _, ds := range list {
-		views = append(views, toDatasourceView(ds))
-	}
-	writeJSON(w, views)
-}
-
-func (h *Handler) createDatasource(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	var ds model.Datasource
-	if err := json.NewDecoder(r.Body).Decode(&ds); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	ds.ID = uuid.NewString()
-	ds.OwnerID = u.ID
-
-	// Only admin can create global datasources
-	if ds.Global && u.Role != model.RoleAdmin {
-		ds.Global = false
-	}
-
-	settings := h.store.GetSettings()
-	settings.Datasources = append(settings.Datasources, ds)
-	if err := h.store.SaveSettings(settings); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, toDatasourceView(ds))
-}
-
-func (h *Handler) updateDatasource(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	id := r.PathValue("id")
-
-	var input model.Datasource
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	settings := h.store.GetSettings()
-	found := false
-	for i := range settings.Datasources {
-		if settings.Datasources[i].ID != id {
-			continue
-		}
-		existing := settings.Datasources[i]
-		if existing.OwnerID != u.ID && u.Role != model.RoleAdmin {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		// Preserve immutable fields; restrict global flag to admins.
-		input.ID = existing.ID
-		input.OwnerID = existing.OwnerID
-		if input.Global && u.Role != model.RoleAdmin {
-			input.Global = existing.Global
-		}
-		// Parol GET javobida qaytarilmaydi, shuning uchun bo'sh parol =
-		// "o'zgartirilmasin" (username saqlanib qolgan bo'lsa). Username
-		// tozalansa basic auth butunlay o'chadi.
-		if input.Username == "" {
-			input.Password = ""
-		} else if input.Password == "" {
-			input.Password = existing.Password
-		}
-		settings.Datasources[i] = input
-		found = true
-		break
-	}
-	if !found {
-		http.Error(w, "datasource not found", http.StatusNotFound)
-		return
-	}
-	if err := h.store.SaveSettings(settings); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, toDatasourceView(input))
-}
-
-func (h *Handler) deleteDatasource(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	id := r.PathValue("id")
-
-	settings := h.store.GetSettings()
-	var filtered []model.Datasource
-	for _, ds := range settings.Datasources {
-		if ds.ID == id {
-			// Only owner or admin can delete
-			if ds.OwnerID != u.ID && u.Role != model.RoleAdmin {
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
-			continue
-		}
-		filtered = append(filtered, ds)
-	}
-	settings.Datasources = filtered
-	if err := h.store.SaveSettings(settings); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// Queries
-
-func (h *Handler) getQueries(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	writeJSON(w, h.store.GetQueriesForUser(u.ID))
-}
-
-func (h *Handler) createQuery(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	var q model.SavedQuery
-	if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	q.ID = uuid.NewString()
-	q.OwnerID = u.ID
-
-	// Only admin can create global queries
-	if q.Global && u.Role != model.RoleAdmin {
-		q.Global = false
-	}
-
-	if err := h.store.SaveQuery(q); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, q)
-}
-
-func (h *Handler) updateQuery(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	id := r.PathValue("id")
-
-	var input model.SavedQuery
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	var existing *model.SavedQuery
-	for _, q := range h.store.GetQueries() {
-		if q.ID == id {
-			qq := q
-			existing = &qq
-			break
-		}
-	}
-	if existing == nil {
-		http.Error(w, "query not found", http.StatusNotFound)
-		return
-	}
-	if existing.OwnerID != u.ID && u.Role != model.RoleAdmin {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-
-	input.ID = existing.ID
-	input.OwnerID = existing.OwnerID
-	if input.Global && u.Role != model.RoleAdmin {
-		input.Global = existing.Global
-	}
-
-	if err := h.store.SaveQuery(input); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, input)
-}
-
-func (h *Handler) deleteQuery(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	id := r.PathValue("id")
-
-	queries := h.store.GetQueries()
-	for _, q := range queries {
-		if q.ID == id {
-			if q.OwnerID != u.ID && u.Role != model.RoleAdmin {
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
-		}
-	}
-
-	if err := h.store.DeleteQuery(id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// Export & Jobs
-
-// canAccessJob — job egasi yoki admin.
-func canAccessJob(u *auth.AuthUser, job *model.ExportJob) bool {
-	return u != nil && (u.Role == model.RoleAdmin || job.OwnerID == u.ID)
-}
-
-// loadJobForUser job'ni topadi va ruxsatni tekshiradi; muammo bo'lsa javobni
-// o'zi yozadi va nil qaytaradi.
-func (h *Handler) loadJobForUser(w http.ResponseWriter, r *http.Request, id string) *model.ExportJob {
-	job := h.store.GetJob(id)
-	if job == nil {
-		http.Error(w, "job not found", http.StatusNotFound)
-		return nil
-	}
-	if !canAccessJob(auth.GetUser(r), job) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return nil
-	}
-	return job
-}
-
-func (h *Handler) startExport(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	var req struct {
-		Query        string `json:"query"`
-		DatasourceID string `json:"datasource_id"`
-		Start        string `json:"start"`
-		End          string `json:"end"`
-		SortOrder    string `json:"sort_order"`
-		Name         string `json:"name"`
-		Format       string `json:"format"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.Query == "" || req.DatasourceID == "" {
-		http.Error(w, "query and datasource_id are required", http.StatusBadRequest)
-		return
-	}
-	// Datasource foydalanuvchiga ko'rinadigan bo'lishi shart (o'ziniki yoki global).
-	if h.store.GetDatasource(req.DatasourceID) == nil {
-		http.Error(w, "datasource not found", http.StatusNotFound)
-		return
-	}
-
-	jobID := h.worker.StartExport(worker.ExportParams{
-		Query:        req.Query,
-		DatasourceID: req.DatasourceID,
-		Start:        req.Start,
-		End:          req.End,
-		SortOrder:    req.SortOrder,
-		Name:         req.Name,
-		Format:       req.Format,
-		OwnerID:      u.ID,
-		OwnerName:    u.Username,
-	})
-	writeJSON(w, map[string]string{"job_id": jobID})
-}
-
-// contentTypeForFile fayl kengaytmasiga qarab Content-Type qaytaradi.
-func contentTypeForFile(name string) string {
-	lower := strings.ToLower(name)
-	switch {
-	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
-		return "application/gzip"
-	case strings.HasSuffix(lower, ".gz"):
-		return "application/gzip"
-	default:
-		return "application/octet-stream"
-	}
-}
-
-// getJobs — admin barcha joblarni, oddiy user faqat o'zinikini ko'radi.
-func (h *Handler) getJobs(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	writeJSON(w, h.store.GetJobsForUser(u.ID, u.Role == model.RoleAdmin))
-}
-
-// deleteJob — egasi yoki admin. Running bo'lsa worker to'xtatiladi.
-func (h *Handler) deleteJob(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if h.loadJobForUser(w, r, id) == nil {
-		return
-	}
-	h.worker.Cancel(id)
-	h.store.DeleteJob(id)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// Share links
-
-func (h *Handler) createShare(w http.ResponseWriter, r *http.Request) {
-	u := auth.GetUser(r)
-	jobID := r.PathValue("id")
-
-	job := h.loadJobForUser(w, r, jobID)
-	if job == nil {
-		return
-	}
-	if job.Status != model.JobDone {
-		http.Error(w, "job is not completed yet", http.StatusBadRequest)
-		return
-	}
-
-	var req struct {
-		MaxDownloads int    `json:"max_downloads"`
-		ExpiresAt    string `json:"expires_at"` // RFC3339 UTC, ixtiyoriy
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.MaxDownloads < 0 {
-		req.MaxDownloads = 0
-	}
-
-	var expiresAt *time.Time
-	if s := strings.TrimSpace(req.ExpiresAt); s != "" {
-		t, err := time.Parse(time.RFC3339, s)
-		if err != nil {
-			http.Error(w, "invalid expires_at: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if !t.After(time.Now()) {
-			http.Error(w, "expires_at must be in the future", http.StatusBadRequest)
-			return
-		}
-		expiresAt = &t
-	}
-
-	token, err := generateShareToken()
-	if err != nil {
-		http.Error(w, "failed to generate token", http.StatusInternalServerError)
-		return
-	}
-
-	share := &model.ShareLink{
-		Token:         token,
-		JobID:         jobID,
-		CreatedBy:     u.ID,
-		CreatedAt:     time.Now(),
-		ExpiresAt:     expiresAt,
-		MaxDownloads:  req.MaxDownloads,
-		DownloadCount: 0,
-	}
-	if err := h.store.SaveShare(share); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, shareResponse(r, share))
-}
-
-func (h *Handler) getShare(w http.ResponseWriter, r *http.Request) {
-	jobID := r.PathValue("id")
-	if h.loadJobForUser(w, r, jobID) == nil {
-		return
-	}
-	share := h.store.GetShareByJob(jobID)
-	if share == nil {
-		http.Error(w, "no share for this job", http.StatusNotFound)
-		return
-	}
-	writeJSON(w, shareResponse(r, share))
-}
-
-func (h *Handler) revokeShare(w http.ResponseWriter, r *http.Request) {
-	jobID := r.PathValue("id")
-	if h.loadJobForUser(w, r, jobID) == nil {
-		return
-	}
-	share := h.store.GetShareByJob(jobID)
-	if share == nil {
+	target := h.store.GetUser(id)
+	if target == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if err := h.store.DeleteShare(share.Token); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	h.store.DeleteUser(id)
+	h.audit(r, "user.delete", target.Username, "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// downloadShare — public yuklab olish. Har bir HTTP so'rov = bitta "yuklab
-// olish", shuning uchun Range qo'llab-quvvatlanmaydi (`Accept-Ranges: none`):
-// aks holda download-manager'larning parallel chunk so'rovlari limitni
-// bir zumda tugatib faylni o'chirib yuborardi.
-func (h *Handler) downloadShare(w http.ResponseWriter, r *http.Request) {
-	token := r.PathValue("token")
-
-	share, filePath, exhaustedAfter, err := h.store.ConsumeShare(token)
-	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrShareNotFound):
-			http.Error(w, "link not found", http.StatusNotFound)
-		case errors.Is(err, store.ErrShareExpired), errors.Is(err, store.ErrShareExhausted):
-			http.Error(w, err.Error(), http.StatusGone)
-		default:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-		return
-	}
-
-	job := h.store.GetJob(share.JobID)
-	fileName := "export.log"
-	if job != nil {
-		fileName = job.FileName
-	}
-
-	f, err := os.Open(filePath)
-	if err != nil {
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
-	w.Header().Set("Content-Type", contentTypeForFile(fileName))
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
-	w.Header().Set("Accept-Ranges", "none")
-	w.WriteHeader(http.StatusOK)
-	io.Copy(w, f)
-
-	if exhaustedAfter {
-		h.store.PurgeShare(token)
-	}
-}
-
-func generateShareToken() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// shareResponse — share modelni response uchun tayyorlaydi, full URL ham qo'shadi.
-func shareResponse(r *http.Request, sh *model.ShareLink) map[string]any {
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	host := r.Host
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-		host = h
-	}
-	return map[string]any{
-		"token":          sh.Token,
-		"job_id":         sh.JobID,
-		"created_by":     sh.CreatedBy,
-		"created_at":     sh.CreatedAt,
-		"expires_at":     sh.ExpiresAt,
-		"max_downloads":  sh.MaxDownloads,
-		"download_count": sh.DownloadCount,
-		"url":            fmt.Sprintf("%s://%s/dl/%s", scheme, host, sh.Token),
-	}
-}
-
-func (h *Handler) downloadJob(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	job := h.loadJobForUser(w, r, id)
-	if job == nil {
-		return
-	}
-	if job.Status != model.JobDone {
-		http.Error(w, "job not completed yet", http.StatusBadRequest)
-		return
-	}
-
-	filePath := filepath.Join(h.store.ExportsDir(), job.FileName)
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Disposition", "attachment; filename="+job.FileName)
-	w.Header().Set("Content-Type", contentTypeForFile(job.FileName))
-	http.ServeFile(w, r, filePath)
-}
-
-// Query logs
-
-func (h *Handler) queryLogs(w http.ResponseWriter, r *http.Request) {
-	dsID := r.URL.Query().Get("datasource_id")
-	if dsID == "" {
-		http.Error(w, "datasource_id is required", http.StatusBadRequest)
-		return
-	}
-
-	ds := h.store.GetDatasource(dsID)
-	if ds == nil {
-		http.Error(w, "datasource not found", http.StatusNotFound)
-		return
-	}
-
-	query := r.URL.Query().Get("query")
-	if query == "" {
-		http.Error(w, "query parameter is required", http.StatusBadRequest)
-		return
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 50
-	}
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	if offset < 0 {
-		offset = 0
-	}
-
-	fetchLimit := limit + offset
-
-	baseURL := strings.TrimRight(ds.URL, "/")
-	vlURL := fmt.Sprintf("%s/select/logsql/query", baseURL)
-
-	sortOrder := r.URL.Query().Get("sort")
-	finalQuery := vlclient.WithTimeSort(query, sortOrder)
-
-	params := url.Values{}
-	params.Set("query", finalQuery)
-	params.Set("limit", strconv.Itoa(fetchLimit))
-
-	if start := r.URL.Query().Get("start"); start != "" {
-		params.Set("start", start)
-	}
-	if end := r.URL.Query().Get("end"); end != "" {
-		params.Set("end", end)
-	}
-
-	resp, err := vlclient.Do("GET", vlURL+"?"+params.Encode(), *ds)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("VictoriaLogs request failed: %v", err), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		http.Error(w, fmt.Sprintf("VictoriaLogs error: %s", string(body)), resp.StatusCode)
-		return
-	}
-
-	var allLogs []json.RawMessage
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		allLogs = append(allLogs, json.RawMessage(append([]byte{}, line...)))
-	}
-
-	total := len(allLogs)
-	hasMore := total == fetchLimit
-
-	if offset >= len(allLogs) {
-		allLogs = nil
-	} else {
-		allLogs = allLogs[offset:]
-	}
-	if len(allLogs) > limit {
-		allLogs = allLogs[:limit]
-	}
-
-	result := map[string]any{
-		"logs":     allLogs,
-		"total":    total,
-		"has_more": hasMore,
-		"limit":    limit,
-		"offset":   offset,
-	}
-	writeJSON(w, result)
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
-}
+// exportChunkMB — config qiymati (faqat ko'rsatish uchun, sozlamalar sahifasida).
+func (h *Handler) SetExportChunkMB(mb int) { h.exportChunkMB = mb }

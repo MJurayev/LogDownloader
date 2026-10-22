@@ -11,7 +11,7 @@ frontend:
 
 build: frontend
 	cd backend && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) \
-		go build -ldflags="-s -w" -o ../build/logdownloader-$(GOOS)-$(GOARCH) ./cmd
+		go build -ldflags="-s -w -X main.version=$(VERSION)" -o ../build/logdownloader-$(GOOS)-$(GOARCH) ./cmd
 
 package-rpm: build
 	VERSION=$(VERSION) GOOS=$(GOOS) GOARCH=$(GOARCH) \
