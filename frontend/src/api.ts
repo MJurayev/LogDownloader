@@ -152,10 +152,13 @@ export interface AuthUser {
   role: "admin" | "user";
 }
 
+export type AuthSource = "local" | "ldap";
+
 export interface Profile extends AuthUser {
   email?: string;
   telegram_chat_id?: string;
   notify_on_done: boolean;
+  auth_source?: AuthSource;
 }
 
 export interface UserInfo {
@@ -165,6 +168,32 @@ export interface UserInfo {
   email?: string;
   telegram_chat_id?: string;
   notify_on_done?: boolean;
+  auth_source?: AuthSource;
+}
+
+export interface LDAPSettings {
+  enabled: boolean;
+  url: string;
+  starttls: boolean;
+  insecure_skip_verify: boolean;
+  bind_dn: string;
+  has_bind_password?: boolean;
+  bind_password?: string;
+  clear_bind_password?: boolean;
+  base_dn: string;
+  user_filter: string;
+  username_attr: string;
+  email_attr: string;
+  admin_group_dn: string;
+  allowed_group_dn: string;
+  default_role: "admin" | "user";
+  timeout_sec: number;
+}
+
+export interface LDAPTestResult {
+  ok: boolean;
+  error?: string;
+  result?: { username?: string; dn: string; email?: string; groups?: string[]; is_admin?: boolean };
 }
 
 export interface ShareFile {
@@ -240,12 +269,14 @@ export interface ServerSettings {
     smtp: { host: string; port: number; username: string; has_password: boolean; from: string; starttls: boolean };
   };
   export_chunk_mb: number;
+  ldap: LDAPSettings;
 }
 
 export interface ServerSettingsInput {
   retention?: { days: number; quota_gb: number };
   worker?: { max_concurrent: number };
   public_url?: string;
+  ldap?: LDAPSettings;
   notify?: {
     telegram_bot_token?: string;
     clear_telegram_token?: boolean;
@@ -494,4 +525,6 @@ export const api = {
     authFetch(`${API}/settings`, { method: "PUT", body: JSON.stringify(s) }).then((r) => okJson<ServerSettings>(r)),
   testNotify: (channel: "telegram" | "email" | "webhook"): Promise<{ ok: boolean; error?: string }> =>
     authFetch(`${API}/settings/notify/test`, { method: "POST", body: JSON.stringify({ channel }) }).then((r) => okJson(r)),
+  testLDAP: (ldap: LDAPSettings, username?: string, password?: string): Promise<LDAPTestResult> =>
+    authFetch(`${API}/settings/ldap/test`, { method: "POST", body: JSON.stringify({ ldap, username: username || "", password: password || "" }) }).then((r) => okJson(r)),
 };

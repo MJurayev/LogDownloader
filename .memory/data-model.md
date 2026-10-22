@@ -24,9 +24,9 @@ Storage — disk ustida JSON fayllar (`encoding/json` + `os.WriteFile`), [backen
 
 ## Tip ta'riflari — [`model/models.go`](../backend/internal/model/models.go)
 
-- **User**: `ID, Username, Password(bcrypt), Role, Email, TelegramChatID, NotifyOnDone`.
+- **User**: `ID, Username, Password(bcrypt; LDAP userda bo'sh), Role, AuthSource(""|local|ldap), DN, Email, TelegramChatID, NotifyOnDone`.
 - **Datasource**: `ID, Name, URL, Username, Password(plain), Headers, AccountID, ProjectID, Global, OwnerID`. API javobi `datasourceView` — `Password` tashlanadi, `HasPassword` qo'shiladi.
-- **Settings**: `Datasources[]`, `Retention{Days, QuotaGB}` (0 = o'chiq; birinchi ishga tushishda Days=30), `Worker{MaxConcurrent}` (default 2), `Notify{TelegramBotToken, SMTP{Host,Port,Username,Password,From,StartTLS}, WebhookURL}`, `PublicURL`.
+- **Settings**: `Datasources[]`, `Retention{Days, QuotaGB}` (0 = o'chiq; birinchi ishga tushishda Days=30), `Worker{MaxConcurrent}` (default 2), `Notify{TelegramBotToken, SMTP{Host,Port,Username,Password,From,StartTLS}, WebhookURL}`, `LDAP{Enabled, URL, StartTLS, InsecureSkipVerify, BindDN, BindPassword(plain), BaseDN, UserFilter, UsernameAttr, EmailAttr, AdminGroupDN, AllowedGroupDN, DefaultRole, TimeoutSec}`, `PublicURL`.
 - **SavedQuery**: `ID, Name, Query, DatasourceID?, Global, OwnerID`.
 - **ExportJob**: `ID("job_<unixnano>"), OwnerID, OwnerName, Query, DatasourceID, DatasourceName, Status(queued|running|done|failed), FileName(birinchi fayl), Files[]{Name,Size,Parts}, CreatedAt, StartedAt, FinishedAt, Error, Lines, Start, End, SortOrder, Format(tar.gz|log.gz|log), Content(ndjson|msg|csv), Fields[], ArchiveSplitMB, Size(jami), Parts(jami), TotalEstimate, WindowsTotal, WindowsDone, Retries, ScheduleID, Notify, AutoShare, ShareURL`.
 - **ShareLink**: `Token, JobID, CreatedBy, CreatedAt, ExpiresAt?, MaxDownloads(0=∞), DownloadCount`.
@@ -45,6 +45,7 @@ Storage — disk ustida JSON fayllar (`encoding/json` + `os.WriteFile`), [backen
 - **Share**: 1 share per job; `ConsumeShare(token, fileIndex)` atomik (tekshir → count++ → limit yetsa serve'dan keyin purge). Purge = share + job + fayllar.
 - **Audit**: `Audit()` xatoni yutadi (asosiy ishni to'xtatmaydi); `ReadAudit` joriy faylni to'liq o'qiydi (20 MB chegara).
 - **History**: dublikat query yuqoriga ko'chadi, 50 ta.
+- **LDAP userlar**: `Password == ""` va `AuthSource == ldap` → lokal login imkonsiz, har kirish LDAP bind. Username lower-case saqlanadi (`GetUserByUsername` exact, login'da lower-case fallback). Admin parol qo'ysa `AuthSource = local`.
 - **Worker HTTP — timeout'siz, context bilan.** `DoLongRunning(ctx)`; `Cancel(jobID)` navbatdan oladi yoki ctx'ni bekor qiladi. Bekor qilingan job fayllari (`.tmp`, final, `_vol*`) worker chiqishida o'chadi.
 - **Sink rollback invarianti:** `mark()` bufferni flush qiladi → diskdagi hajm = mantiqiy offset; `rollback` = `bufW.Reset` + `Truncate(offset)` + `Seek` + tracker/lines restore. Shunda faqat joriy oyna tashlanadi (oldin flush bo'lmagani uchun oldingi oyna ma'lumoti yo'qolardi — tuzatilgan).
 - **Volumelar**: faqat `tar.gz`; chegara siqilgan baytlar (`countingWriter` faylga tushganlar, bufio/gzip ichidagilarsiz) ≥ limit bo'lganda **qism tugagach** keyingi volume; birinchi volume oxirida `_vol001` ga rename (agar >1).

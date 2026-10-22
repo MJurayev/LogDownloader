@@ -9,17 +9,17 @@ Handlerlar [backend/internal/handler/](../backend/internal/handler/) da (fayllar
 { "username": "admin", "password": "admin" }
 → 200 { "token": "<jwt>", "user_id": "uuid", "username": "admin", "role": "admin" }
 ```
-401 `invalid credentials`. **Rate limit:** IP bo'yicha 30 so'rov/min → 429 `too many requests` (Retry-After 60); bitta user+IP uchun 5 xato / 15 min → 429 `too many failed attempts...` (Retry-After 900). Audit: `login.ok` / `login.fail` / `login.blocked`.
+401 `invalid credentials`. **Kirish tartibi:** lokal paroli bor va `auth_source != ldap` user → faqat lokal bcrypt; aks holda `settings.ldap.enabled` → LDAP (`ldapauth.Authenticate`); LDAP muvaffaqiyatli bo'lsa user yaratiladi/yangilanadi (`auth_source: ldap`, `dn`, email, rol — `admin_group_dn` berilsa LDAP bo'yicha). Audit `login.ok` details `local|ldap`, `login.fail` details `local` yoki `ldap: <sabab>`. **Rate limit:** IP bo'yicha 30 so'rov/min → 429 `too many requests` (Retry-After 60); bitta user+IP uchun 5 xato / 15 min → 429 `too many failed attempts...` (Retry-After 900). Audit: `login.ok` / `login.fail` / `login.blocked`.
 
 ### GET `/api/me`
-`{ user_id, username, role, email, telegram_chat_id, notify_on_done }` (store'dan).
+`{ user_id, username, role, email, telegram_chat_id, notify_on_done, auth_source }` (store'dan; `auth_source`: `local` | `ldap`).
 
 ### PUT `/api/me`
 ```json
 { "email": "a@b", "telegram_chat_id": "123", "notify_on_done": true,
   "current_password": "...", "new_password": "..." }
 ```
-Maydonlar ixtiyoriy (pointer semantikasi: berilmagani o'zgarmaydi). Parol o'zgarishi uchun `current_password` to'g'ri bo'lishi shart (403), `new_password` ≥ 6 belgi (400). Audit `profile.update` / `password.change`.
+Maydonlar ixtiyoriy (pointer semantikasi: berilmagani o'zgarmaydi). Parol o'zgarishi uchun `current_password` to'g'ri bo'lishi shart (403), `new_password` ≥ 6 belgi (400); LDAP user uchun 400 `password is managed by LDAP`. Audit `profile.update` / `password.change`.
 
 ## Datasources
 
@@ -143,7 +143,7 @@ Noto'g'ri cron → 400. `enabled=false` → `next_run_at` null. Audit `schedule.
 Scheduler har 30s: `next_run_at <= now` → export (`schedule_id`, nom = reja nomi), keyingi vaqt hisoblanadi; server o'chiq paytda o'tkazib yuborilgan run bitta marta qoplanadi.
 
 ## Users (admin) — `GET/POST /api/users`, `PUT/DELETE /api/users/{id}`
-POST `{username, password, role, email}`; PUT `{role, password, email}` (bo'sh = o'zgarmaydi). O'zini o'chirish 400. Audit `user.create/update/delete`.
+POST `{username, password, role, email}`; PUT `{role, password, email}` (bo'sh = o'zgarmaydi; LDAP userga parol qo'yilsa `auth_source` → `local`). Javoblarda `auth_source`. O'zini o'chirish 400. Audit `user.create/update/delete`.
 
 ## Audit (admin)
 ### GET `/api/audit?limit=100&offset=0&action=&user=` → `{ entries:[{time,user_id,user,action,target,ip,details}], total, limit, offset }` (eng yangisi birinchi; filtr substring).
@@ -156,10 +156,15 @@ Amallar: `login.ok|fail|blocked`, `profile.update`, `password.change`, `user.*`,
 { "retention": {"days": 30, "quota_gb": 0}, "worker": {"max_concurrent": 2}, "public_url": "",
   "notify": { "has_telegram_token": false, "webhook_url": "",
               "smtp": {"host","port","username","has_password","from","starttls"} },
-  "export_chunk_mb": 100 }
+  "export_chunk_mb": 100,
+  "ldap": { "enabled": false, "url": "", "starttls": false, "insecure_skip_verify": false, "bind_dn": "", "has_bind_password": false,
+            "base_dn": "", "user_filter": "", "username_attr": "", "email_attr": "", "admin_group_dn": "", "allowed_group_dn": "",
+            "default_role": "user", "timeout_sec": 0 } }
 ```
 ### PUT `/api/settings` — qisman: `retention`, `worker` (1..64), `public_url`, `notify.telegram_bot_token` (bo'sh = o'zgarmaydi, `clear_telegram_token: true` = o'chirish), `notify.webhook_url`, `notify.smtp` (`password` bo'sh = o'zgarmaydi, `clear_password`). Worker uyg'otiladi. Audit `settings.update`.
 ### POST `/api/settings/notify/test` `{ "channel": "telegram|email|webhook" }` → `{ ok, error }` (qabul qiluvchi — joriy admin profili).
+`PUT /api/settings` `ldap` bo'limi: yuqoridagi maydonlar + `bind_password` (bo'sh = o'zgarmaydi), `clear_bind_password`. Defaultlar: filtr `(&(objectClass=user)(sAMAccountName=%s))`, `username_attr` sAMAccountName, `email_attr` mail, timeout 10s.
+### POST `/api/settings/ldap/test` `{ "ldap": {...forma}, "username": "", "password": "" }` → `{ ok, error }` yoki `{ ok: true, result: { dn, username, email, groups[], is_admin } }`. Username bo'sh → faqat ulanish + service bind + base DN; berilsa to'liq login sinovi. Bind paroli bo'sh bo'lsa saqlangani ishlatiladi.
 
 ## System (auth'siz)
 - `GET /healthz`, `/readyz` → `{ status: "ok", version, uptime, worker: {running, queued} }`

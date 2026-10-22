@@ -94,6 +94,10 @@ export default function ProfilePage() {
       <div className="ds-card" style={{ marginTop: 16 }}>
         <div className="ds-card-body" style={{ paddingTop: 16 }}>
           <h3 className="subsection-title">{t("changePasswordTitle")}</h3>
+          {profile.auth_source === "ldap" ? (
+            <div className="field-hint">{t("ldapNoPasswordChange")}</div>
+          ) : (
+          <>
           <div className="settings-auth-row">
             <input type="password" value={curPass} onChange={(e) => setCurPass(e.target.value)} placeholder={t("currentPassword")} className="input" autoComplete="current-password" />
             <input type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder={t("newPassword")} className="input" autoComplete="new-password" />
@@ -102,6 +106,8 @@ export default function ProfilePage() {
             {passMsg && <span className="save-modal-msg">{passMsg}</span>}
             <button onClick={changePassword} disabled={passSaving || !curPass || !newPass} className="btn btn-small btn-primary">{passSaving ? "..." : t("save")}</button>
           </div>
+          </>
+          )}
         </div>
       </div>
     </div>

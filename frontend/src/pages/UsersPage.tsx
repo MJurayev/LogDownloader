@@ -102,6 +102,7 @@ export default function UsersPage() {
               <div className="job-header-left">
                 <strong>{u.username}</strong>
                 <span className={`badge ${u.role === "admin" ? "badge-done" : "badge-running"}`}>{u.role.toUpperCase()}</span>
+                {u.auth_source === "ldap" && <span className="job-format-chip">{t("ldapBadge")}</span>}
                 {u.email && <span className="job-ds-name">{u.email}</span>}
                 {u.telegram_chat_id && <span className="job-parts-chip">TG</span>}
               </div>

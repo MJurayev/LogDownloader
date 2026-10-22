@@ -9,11 +9,20 @@ const (
 	RoleUser  Role = "user"
 )
 
+// Auth manbai: bo'sh yoki "local" — lokal parol; "ldap" — LDAP/AD (parol hash yo'q).
+const (
+	AuthLocal = "local"
+	AuthLDAP  = "ldap"
+)
+
 type User struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Password string `json:"password,omitempty"` // bcrypt hash, omit in JSON responses
 	Role     Role   `json:"role"`
+	// AuthSource — "ldap" bo'lsa parol LDAP'da tekshiriladi; DN — LDAP yozuvi.
+	AuthSource string `json:"auth_source,omitempty"`
+	DN         string `json:"dn,omitempty"`
 	// Bildirishnoma manzillari (profil). Bo'sh bo'lsa shu kanal ishlatilmaydi.
 	Email          string `json:"email,omitempty"`
 	TelegramChatID string `json:"telegram_chat_id,omitempty"`
@@ -63,11 +72,31 @@ type NotifySettings struct {
 	WebhookURL       string       `json:"webhook_url,omitempty"`
 }
 
+// LDAPSettings — LDAP / Active Directory autentifikatsiyasi (admin sozlaydi).
+// Kirish tartibi: lokal paroli bor user → lokal; aks holda Enabled bo'lsa LDAP.
+type LDAPSettings struct {
+	Enabled            bool   `json:"enabled"`
+	URL                string `json:"url"`                  // ldap://dc:389 | ldaps://dc:636
+	StartTLS           bool   `json:"starttls"`             // faqat ldap:// uchun
+	InsecureSkipVerify bool   `json:"insecure_skip_verify"` // TLS sertifikatini tekshirmaslik
+	BindDN             string `json:"bind_dn,omitempty"`    // service account; bo'sh = anonim
+	BindPassword       string `json:"bind_password,omitempty"`
+	BaseDN             string `json:"base_dn"`                    // DC=ucell,DC=uz
+	UserFilter         string `json:"user_filter,omitempty"`      // default (&(objectClass=user)(sAMAccountName=%s))
+	UsernameAttr       string `json:"username_attr,omitempty"`    // sAMAccountName
+	EmailAttr          string `json:"email_attr,omitempty"`       // mail
+	AdminGroupDN       string `json:"admin_group_dn,omitempty"`   // a'zolari admin (nested ham)
+	AllowedGroupDN     string `json:"allowed_group_dn,omitempty"` // bo'sh = hamma kira oladi
+	DefaultRole        Role   `json:"default_role,omitempty"`     // user
+	TimeoutSec         int    `json:"timeout_sec,omitempty"`      // 10
+}
+
 type Settings struct {
 	Datasources []Datasource      `json:"datasources"`
 	Retention   RetentionSettings `json:"retention"`
 	Worker      WorkerSettings    `json:"worker"`
 	Notify      NotifySettings    `json:"notify"`
+	LDAP        LDAPSettings      `json:"ldap"`
 	// PublicURL — tashqaridan ko'rinadigan manzil (share/notification linklari uchun),
 	// masalan https://logs.example.com. Bo'sh bo'lsa so'rovdagi Host ishlatiladi.
 	PublicURL string `json:"public_url,omitempty"`

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { api, type Datasource, type DatasourceInput, type ServerSettings } from "../api";
+import { api, type Datasource, type DatasourceInput, type LDAPSettings, type ServerSettings } from "../api";
 import { useT } from "../i18n";
 import "./Pages.css";
 
@@ -84,6 +84,14 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
   const [webhook, setWebhook] = useState("");
   const [smtp, setSmtp] = useState({ host: "", port: 587, username: "", password: "", from: "", starttls: true });
   const [clearSmtpPass, setClearSmtpPass] = useState(false);
+  const emptyLdap = (): LDAPSettings => ({ enabled: false, url: "", starttls: false, insecure_skip_verify: false, bind_dn: "", bind_password: "", base_dn: "", user_filter: "", username_attr: "", email_attr: "", admin_group_dn: "", allowed_group_dn: "", default_role: "user", timeout_sec: 10 });
+  const [ldap, setLdap] = useState<LDAPSettings>(emptyLdap());
+  const [ldapHasPass, setLdapHasPass] = useState(false);
+  const [ldapClearPass, setLdapClearPass] = useState(false);
+  const [ldapTestUser, setLdapTestUser] = useState("");
+  const [ldapTestPass, setLdapTestPass] = useState("");
+  const [ldapTestMsg, setLdapTestMsg] = useState("");
+  const [ldapTesting, setLdapTesting] = useState(false);
   const [adminMsg, setAdminMsg] = useState("");
   const [adminSaving, setAdminSaving] = useState(false);
   const [notifyTestMsg, setNotifyTestMsg] = useState<Record<string, string>>({});
@@ -105,6 +113,27 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
     setTgToken("");
     setClearTg(false);
     setClearSmtpPass(false);
+    const l = s.ldap || emptyLdap();
+    setLdap({ ...emptyLdap(), ...l, bind_password: "", timeout_sec: l.timeout_sec || 10 });
+    setLdapHasPass(!!l.has_bind_password);
+    setLdapClearPass(false);
+  };
+
+  const ldapPayload = (): LDAPSettings => ({ ...ldap, bind_password: ldap.bind_password || undefined, clear_bind_password: ldapClearPass, has_bind_password: undefined });
+
+  const testLdap = async (withLogin: boolean) => {
+    setLdapTesting(true);
+    setLdapTestMsg("");
+    try {
+      const r = await api.testLDAP(ldapPayload(), withLogin ? ldapTestUser : "", withLogin ? ldapTestPass : "");
+      if (!r.ok) setLdapTestMsg(t("testFail", { err: r.error || "?" }));
+      else if (withLogin && r.result) setLdapTestMsg(t("ldapTestLoginOk", { dn: r.result.dn, groups: (r.result.groups || []).length, admin: r.result.is_admin ? t("yes") : t("no") }));
+      else setLdapTestMsg(t("ldapTestOk", { dn: r.result?.dn || "" }));
+    } catch (err) {
+      setLdapTestMsg(t("testFail", { err: typeof err === "string" ? err : String(err) }));
+    } finally {
+      setLdapTesting(false);
+    }
   };
 
   useEffect(() => {
@@ -179,6 +208,7 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
         retention: { days: retDays, quota_gb: quotaGB },
         worker: { max_concurrent: maxConc },
         public_url: publicUrl,
+        ldap: ldapPayload(),
         notify: {
           telegram_bot_token: tgToken,
           clear_telegram_token: clearTg,
@@ -346,6 +376,77 @@ export default function SettingsPage({ isAdmin }: { isAdmin: boolean }) {
                 <label className="label">{t("publicUrlLabel")}</label>
                 <input value={publicUrl} onChange={(e) => setPublicUrl(e.target.value)} placeholder={t("publicUrlPlaceholder")} className="input" />
               </div>
+
+              <h3 className="subsection-title">{t("ldapTitle")}</h3>
+              <div className="field-hint">{t("ldapOrder")}</div>
+              <label className="global-check" style={{ marginBottom: 8 }}>
+                <input type="checkbox" checked={ldap.enabled} onChange={(e) => setLdap({ ...ldap, enabled: e.target.checked })} />
+                {t("ldapEnabled")}
+              </label>
+              <div className="settings-grid ldap-grid">
+                <div className="form-group">
+                  <label className="label">{t("ldapUrl")}</label>
+                  <input value={ldap.url} onChange={(e) => setLdap({ ...ldap, url: e.target.value })} placeholder={t("ldapUrlHint")} className="input" />
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("ldapBaseDn")}</label>
+                  <input value={ldap.base_dn} onChange={(e) => setLdap({ ...ldap, base_dn: e.target.value })} placeholder="DC=example,DC=com" className="input" />
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("ldapBindDn")}</label>
+                  <input value={ldap.bind_dn} onChange={(e) => setLdap({ ...ldap, bind_dn: e.target.value })} placeholder="CN=svc-logs,OU=Service,DC=example,DC=com" className="input" />
+                  <div className="field-hint">{t("ldapBindDnHint")}</div>
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("ldapBindPassword")}</label>
+                  <div className="settings-auth-row">
+                    <input type="password" value={ldap.bind_password || ""} onChange={(e) => { setLdap({ ...ldap, bind_password: e.target.value }); setLdapClearPass(false); }} placeholder={ldapHasPass && !ldapClearPass ? t("tokenSaved") : t("ldapBindPassword")} className="input" autoComplete="new-password" />
+                    {ldapHasPass && <button type="button" className="btn btn-small btn-outline" onClick={() => { setLdapClearPass(true); setLdap({ ...ldap, bind_password: "" }); }}>{ldapClearPass ? "✓ " : ""}{t("clearValue")}</button>}
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("ldapUserFilter")}</label>
+                  <input value={ldap.user_filter} onChange={(e) => setLdap({ ...ldap, user_filter: e.target.value })} placeholder="(&(objectClass=user)(sAMAccountName=%s))" className="input" />
+                  <div className="field-hint">{t("ldapUserFilterHint")}</div>
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("ldapUsernameAttr")} / {t("ldapEmailAttr")}</label>
+                  <div className="settings-auth-row">
+                    <input value={ldap.username_attr} onChange={(e) => setLdap({ ...ldap, username_attr: e.target.value })} placeholder="sAMAccountName" className="input" />
+                    <input value={ldap.email_attr} onChange={(e) => setLdap({ ...ldap, email_attr: e.target.value })} placeholder="mail" className="input" />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("ldapAdminGroup")}</label>
+                  <input value={ldap.admin_group_dn} onChange={(e) => setLdap({ ...ldap, admin_group_dn: e.target.value })} placeholder="CN=LogAdmins,OU=Groups,DC=example,DC=com" className="input" />
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("ldapAllowedGroup")}</label>
+                  <input value={ldap.allowed_group_dn} onChange={(e) => setLdap({ ...ldap, allowed_group_dn: e.target.value })} placeholder="CN=LogUsers,OU=Groups,DC=example,DC=com" className="input" />
+                  <div className="field-hint">{t("ldapGroupHint")}</div>
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("ldapDefaultRole")} / {t("ldapTimeout")}</label>
+                  <div className="settings-auth-row">
+                    <select value={ldap.default_role} onChange={(e) => setLdap({ ...ldap, default_role: e.target.value as "admin" | "user" })} className="input ds-select">
+                      <option value="user">{t("roleUser")}</option>
+                      <option value="admin">{t("roleAdmin")}</option>
+                    </select>
+                    <input type="number" min={1} max={120} value={ldap.timeout_sec} onChange={(e) => setLdap({ ...ldap, timeout_sec: Number(e.target.value) })} className="input" />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="global-check"><input type="checkbox" checked={ldap.starttls} onChange={(e) => setLdap({ ...ldap, starttls: e.target.checked })} />{t("ldapStartTLS")}</label>
+                  <label className="global-check"><input type="checkbox" checked={ldap.insecure_skip_verify} onChange={(e) => setLdap({ ...ldap, insecure_skip_verify: e.target.checked })} />{t("ldapSkipVerify")}</label>
+                </div>
+              </div>
+              <div className="settings-auth-row" style={{ marginTop: 8, flexWrap: "wrap" }}>
+                <button type="button" className="btn btn-small btn-outline" disabled={ldapTesting || !ldap.url.trim()} onClick={() => testLdap(false)}>{ldapTesting ? "..." : t("ldapTestConn")}</button>
+                <input value={ldapTestUser} onChange={(e) => setLdapTestUser(e.target.value)} placeholder={t("ldapTestUser")} className="input" style={{ maxWidth: 180 }} />
+                <input type="password" value={ldapTestPass} onChange={(e) => setLdapTestPass(e.target.value)} placeholder={t("ldapTestPass")} className="input" style={{ maxWidth: 180 }} autoComplete="new-password" />
+                <button type="button" className="btn btn-small btn-outline" disabled={ldapTesting || !ldap.url.trim() || !ldapTestUser || !ldapTestPass} onClick={() => testLdap(true)}>{ldapTesting ? "..." : t("ldapTestLogin")}</button>
+              </div>
+              {ldapTestMsg && <div className={`field-hint ${ldapTestMsg.startsWith("OK") ? "ok-text" : "error-text"}`}>{ldapTestMsg}</div>}
 
               <h3 className="subsection-title">{t("notifyTitle")}</h3>
               <div className="field-hint">{t("notifyRecipientsHint")}</div>

@@ -6,11 +6,13 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"logdownloader/internal/auth"
+	"logdownloader/internal/ldapauth"
 	"logdownloader/internal/metrics"
 	"logdownloader/internal/model"
 	"logdownloader/internal/notify"
@@ -98,6 +100,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings", auth.RequireAdmin(h.getSettings))
 	mux.HandleFunc("PUT /api/settings", auth.RequireAdmin(h.updateSettings))
 	mux.HandleFunc("POST /api/settings/notify/test", auth.RequireAdmin(h.testNotify))
+	mux.HandleFunc("POST /api/settings/ldap/test", auth.RequireAdmin(h.testLDAP))
 
 	// System (auth'siz)
 	mux.HandleFunc("GET /healthz", h.healthz)
@@ -130,6 +133,13 @@ func (h *Handler) audit(r *http.Request, action, target, details string) {
 	h.store.Audit(e)
 }
 
+func authSourceOf(u model.User) string {
+	if u.AuthSource == model.AuthLDAP {
+		return model.AuthLDAP
+	}
+	return model.AuthLocal
+}
+
 func userView(u model.User) map[string]any {
 	return map[string]any{
 		"id":               u.ID,
@@ -138,6 +148,7 @@ func userView(u model.User) map[string]any {
 		"email":            u.Email,
 		"telegram_chat_id": u.TelegramChatID,
 		"notify_on_done":   u.NotifyOnDone,
+		"auth_source":      authSourceOf(u),
 	}
 }
 
@@ -179,12 +190,37 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user := h.store.GetUserByUsername(req.Username)
-	if user == nil || !auth.CheckPassword(user.Password, req.Password) {
+	fail := func(details string) {
 		h.limiter.Hit(failKey, loginFailWindow)
 		metrics.LoginFailed.Add(1)
-		h.store.Audit(model.AuditEntry{Action: "login.fail", User: req.Username, IP: ip})
+		h.store.Audit(model.AuditEntry{Action: "login.fail", User: req.Username, IP: ip, Details: details})
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+	}
+
+	user := h.store.GetUserByUsername(req.Username)
+	if user == nil {
+		user = h.store.GetUserByUsername(strings.ToLower(strings.TrimSpace(req.Username)))
+	}
+	st := h.store.GetSettings()
+	source := model.AuthLocal
+	switch {
+	case user != nil && user.Password != "" && user.AuthSource != model.AuthLDAP:
+		// Lokal user — faqat lokal parol (LDAP'ga o'tilmaydi).
+		if !auth.CheckPassword(user.Password, req.Password) {
+			fail("local")
+			return
+		}
+	case st.LDAP.Enabled:
+		res, err := ldapauth.Authenticate(r.Context(), st.LDAP, req.Username, req.Password)
+		if err != nil {
+			log.Printf("ldap login %q: %v", req.Username, err)
+			fail("ldap: " + err.Error())
+			return
+		}
+		user = h.upsertLDAPUser(user, res, st.LDAP)
+		source = model.AuthLDAP
+	default:
+		fail("local")
 		return
 	}
 	h.limiter.Reset(failKey)
@@ -194,13 +230,47 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "token generation failed", http.StatusInternalServerError)
 		return
 	}
-	h.store.Audit(model.AuditEntry{Action: "login.ok", UserID: user.ID, User: user.Username, IP: ip})
+	h.store.Audit(model.AuditEntry{Action: "login.ok", UserID: user.ID, User: user.Username, IP: ip, Details: source})
 	writeJSON(w, map[string]any{
 		"token":    token,
 		"user_id":  user.ID,
 		"username": user.Username,
 		"role":     user.Role,
 	})
+}
+
+// upsertLDAPUser — LDAP orqali kirgan userni yaratadi yoki yangilaydi.
+// AdminGroupDN sozlangan bo'lsa rol har kirishda LDAP bo'yicha qayta belgilanadi.
+func (h *Handler) upsertLDAPUser(existing *model.User, res *ldapauth.Result, cfg model.LDAPSettings) *model.User {
+	defaultRole := cfg.DefaultRole
+	if defaultRole != model.RoleAdmin {
+		defaultRole = model.RoleUser
+	}
+	var u model.User
+	if existing != nil {
+		u = *existing
+	} else {
+		u = model.User{ID: uuid.NewString(), Username: res.Username, Role: defaultRole}
+	}
+	u.AuthSource = model.AuthLDAP
+	u.Password = ""
+	u.DN = res.DN
+	if res.Email != "" {
+		u.Email = res.Email
+	}
+	if cfg.AdminGroupDN != "" {
+		if res.IsAdmin {
+			u.Role = model.RoleAdmin
+		} else {
+			u.Role = model.RoleUser
+		}
+	} else if u.Role == "" {
+		u.Role = defaultRole
+	}
+	if err := h.store.SaveUser(u); err != nil {
+		log.Printf("ldap user save %q: %v", u.Username, err)
+	}
+	return &u
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
@@ -221,6 +291,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		"email":            full.Email,
 		"telegram_chat_id": full.TelegramChatID,
 		"notify_on_done":   full.NotifyOnDone,
+		"auth_source":      authSourceOf(*full),
 	})
 }
 
@@ -253,6 +324,10 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	}
 	changedPassword := false
 	if req.NewPassword != "" {
+		if user.AuthSource == model.AuthLDAP {
+			http.Error(w, "password is managed by LDAP", http.StatusBadRequest)
+			return
+		}
 		if !auth.CheckPassword(user.Password, req.CurrentPassword) {
 			http.Error(w, "current password is wrong", http.StatusForbidden)
 			return
@@ -356,6 +431,11 @@ func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user.Password = hash
+		// Admin parol qo'ysa user lokal bo'ladi (LDAP'dan ajratiladi).
+		if user.AuthSource == model.AuthLDAP {
+			user.AuthSource = model.AuthLocal
+			details = append(details, "auth_source=local")
+		}
 		details = append(details, "password")
 	}
 	if req.Email != nil {

@@ -13,6 +13,7 @@ backend/
   cmd/main.go              # entry: config -> store -> RecoverJobs -> notifier -> worker -> scheduler -> handler -> serve
   internal/
     auth/                  # JWT (sessiya + download token), bcrypt, middleware, rate limiter
+    ldapauth/              # LDAP / Active Directory autentifikatsiyasi (go-ldap)
     config/                # YAML/env config (host, port, data_dir, jwt_secret, export_chunk_mb)
     handler/               # /api/* — handler.go (auth/users/profil), datasources, queries, logs (viewer proxy),
                            #   jobs, shares, schedules, admin (audit, settings), system (healthz, metrics)
@@ -84,6 +85,7 @@ make package-deb
 - **Go 1.22+ mux pattern** (`mux.HandleFunc("POST /api/...")`, `r.PathValue`). `gorilla/mux` qo'shmang.
 - **Auth middleware** `/api/login` va `/api/`'dan tashqari hamma yo'lni bypass qiladi (static, `/dl/`, `/healthz`, `/metrics`). Userni har so'rovda store'dan o'qiydi. Yangi public endpoint — [auth.go](backend/internal/auth/auth.go) `Middleware`. `/download` yo'llarida `?dt=` (typ=download, job'ga bog'langan, 5 min) qabul qilinadi; eski `?token=<jwt>` **yo'q**.
 - **Login himoyasi**: IP bo'yicha 30/min, user+IP bo'yicha 5 xato / 15 min → 429 (`auth.Limiter`, xotirada).
+- **LDAP / AD** (`ldapauth`, sozlama `Settings.LDAP`, admin UI): kirish tartibi — **lokal paroli bor user → faqat lokal**; aks holda `LDAP.Enabled` bo'lsa `ldapauth.Authenticate` (service bind → UserFilter qidiruv → user DN bind → memberOf + AD nested guruhlar). LDAP user birinchi kirishda yaratiladi (`AuthSource=ldap`, parol hash yo'q, username lower-case); `AdminGroupDN` berilsa rol har kirishda LDAP bo'yicha; `AllowedGroupDN` bo'lsa faqat shu guruh. Admin LDAP userga parol qo'ysa u lokalga aylanadi. Bo'sh parol bilan bind anonim deb o'tib ketmasin — oldindan rad etiladi. LDAP serverni smoke test qamramaydi (mock yo'q) — real AD'da `POST /api/settings/ldap/test` bilan sinang.
 - **Store nusxa qaytaradi** (`GetSettings`/`GetDatasource`/`GetJob`/`GetJobsForUser`/`GetSchedule`); ichki pointer qaytaruvchi metod qo'shmang. `UpdateJob(id, persist, fn)` — mutex ostida mutatsiya; progress uchun `persist=false`.
 - **Joblar `jobs.json` da.** Holatlar: `queued → running → done|failed`. Startup `RecoverJobs`: running → failed, queued qayta navbatga, orphan fayllar o'chadi. Worker navbati `settings.worker.max_concurrent` (admin UI), dispatcher `Signal()` bilan uyg'otiladi.
 - **Export dvigateli (worker/)** — o'zgartirishdan oldin oqimni tushuning:
@@ -107,7 +109,7 @@ make package-deb
 
 ## Stil
 
-- Go: standard library'ga ustuvor; faqat 4 ta external dep (uuid, jwt, x/crypto, yaml). Yangi dep qo'shishdan oldin kelishish.
+- Go: standard library'ga ustuvor; external dep'lar: uuid, jwt, x/crypto, yaml, go-ldap (+asn1-ber). Yangi dep qo'shishdan oldin kelishish.
 - React: function components + hooks, `useState` + props + `LangContext`. State library, i18n library, chart library yo'q (gistogramma — inline SVG).
 - CSS: `Pages.css` + `Layout.css` + global `index.css`, CSS o'zgaruvchilar (ikkala tema).
 - Backend errorlar: `http.Error(w, msg, code)` plain text.

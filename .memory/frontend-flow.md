@@ -41,16 +41,16 @@ React 19 + TypeScript + Vite. Router: `react-router-dom` v7. State: lokal `useSt
 10s polling. Karta: enabled badge, nom, datasource, egasi, cron, lookback (`1d ⌁` = align), format/content chip'lar; "Hozir ishga tushirish" (`runSchedule` → job id), yoqish/o'chirish (to'liq PUT), tahrirlash, o'chirish; keyingi/oxirgi run, oxirgi job (→ /jobs), xato. Modal forma: nom, datasource, query, cron preset (har soat / har kuni 00:05 / har dushanba / custom input), lookback preset, align, format/content/fields/arxiv hajmi, notify (profil manzili bo'lsa), auto-share, enabled.
 
 ### SettingsPage
-Datasource karta: tenant chip (`account:project`), inline forma (nom, URL, basic auth — parol placeholder "Saqlangan", **tenant AccountID/ProjectID**, header'lar, global, **"Ulanishni tekshirish"** → `/api/datasources/test` natija). Admin bo'lsa pastda **Server sozlamalari**: saqlash kuni, kvota GB, bir vaqtda exportlar, chunk info, tashqi manzil; bildirishnoma kanallari — Telegram token (saqlangan placeholder, Tozalash, Test), webhook (Test), SMTP (host/port/from/user/parol/STARTTLS, Tozalash parol, Test). Saqlash → `updateSettings` (bo'sh sirlar = o'zgarmaydi; clear flaglari).
+Datasource karta: tenant chip (`account:project`), inline forma (nom, URL, basic auth — parol placeholder "Saqlangan", **tenant AccountID/ProjectID**, header'lar, global, **"Ulanishni tekshirish"** → `/api/datasources/test` natija). Admin bo'lsa pastda **Server sozlamalari**: saqlash kuni, kvota GB, bir vaqtda exportlar, chunk info, tashqi manzil; **LDAP / Active Directory** (yoqish, URL, base DN, bind DN/parol — saqlangan placeholder + Tozalash, user filtri, username/email atributlari, admin va ruxsat guruhlari, default rol, timeout, StartTLS, TLS tekshirmaslik; "Ulanishni tekshirish" va test login/parol bilan "Kirish testi" → `api.testLDAP` natija: DN, guruhlar soni, admin); bildirishnoma kanallari — Telegram token (saqlangan placeholder, Tozalash, Test), webhook (Test), SMTP (host/port/from/user/parol/STARTTLS, Tozalash parol, Test). Saqlash → `updateSettings` (bo'sh sirlar = o'zgarmaydi; clear flaglari).
 
 ### ProfilePage
-`api.me()` → email, Telegram chat ID (hint), "har export tugaganda xabar"; parol o'zgartirish (joriy + yangi ≥ 6, xatolar tarjima).
+`api.me()` → email, Telegram chat ID (hint), "har export tugaganda xabar"; parol o'zgartirish (joriy + yangi ≥ 6, xatolar tarjima); `auth_source === "ldap"` bo'lsa parol formasi o'rniga "LDAP'da boshqariladi" eslatmasi.
 
 ### AuditPage (admin)
 Filtr (amal — datalist, user), Qidirish/Yangilash/JSONL yuklab olish, jami; jadval (vaqt, user, amal chip rangli prefiks bo'yicha, obyekt, IP, tafsilot), 100 talik pagination. `fail`/`blocked` qatorlari `log-warn`.
 
 ### UsersPage (admin)
-Yaratish (username, parol, email, rol), karta (rol badge, email, TG chip), tahrirlash (rol, email, parol).
+Yaratish (username, parol, email, rol), karta (rol badge, LDAP chip, email, TG chip), tahrirlash (rol, email, parol — LDAP userga parol qo'yilsa lokalga aylanadi).
 
 ### LoginPage / Layout
 Login kartasida UZ/RU; sidebar: Log Viewer, Jobs, Rejalar, Settings, (Users, Audit — admin), Profil + UZ/RU + tema + Chiqish.

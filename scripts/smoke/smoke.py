@@ -337,6 +337,23 @@ try:
     st, af, _ = req("GET", "/api/audit/download", token=admin, raw=True)
     check(st == 200 and af.count(b"\n") >= au["total"], "audit download")
 
+    print("== LDAP settings (server yo'q — faqat sozlama/oqim)")
+    st, sv, _ = req("PUT", "/api/settings", {"ldap": {"enabled": True, "url": "ldap://127.0.0.1:1", "base_dn": "DC=example,DC=com", "bind_dn": "svc@example.com", "bind_password": "s3cret",
+                                                       "admin_group_dn": "CN=Admins,DC=example,DC=com", "default_role": "user", "timeout_sec": 2}}, admin)
+    check(st == 200 and sv["ldap"]["enabled"] and sv["ldap"]["has_bind_password"] and "bind_password" not in sv["ldap"] and sv["ldap"]["timeout_sec"] == 2, "ldap settings saved, bind password masked")
+    on_disk = json.load(open(os.path.join(DATA, "settings.json")))["ldap"]
+    check(on_disk["bind_password"] == "s3cret" and on_disk["url"] == "ldap://127.0.0.1:1", "ldap settings on disk")
+    st, lt, _ = req("POST", "/api/settings/ldap/test", {"ldap": {"enabled": True, "url": "ldap://127.0.0.1:1", "base_dn": "DC=example,DC=com", "timeout_sec": 2}}, admin)
+    check(st == 200 and not lt["ok"] and "ulanish" in lt["error"].lower(), f"ldap test reports connection error: {lt.get('error', '')[:60]}")
+    st, _, _ = req("POST", "/api/login", {"username": "admin", "password": "admin"})
+    check(st == 200, "local admin still logs in with LDAP enabled (local precedence)")
+    st, _, _ = req("POST", "/api/login", {"username": "ldapuser", "password": "x"}, headers={"X-Forwarded-For": "10.8.8.8"})
+    check(st == 401, "unknown user with unreachable LDAP -> 401")
+    st, au3, _ = req("GET", "/api/audit?action=login.fail&user=ldapuser", token=admin)
+    check(au3["total"] == 1 and au3["entries"][0]["details"].startswith("ldap:"), "audit records ldap failure reason")
+    st, sv, _ = req("PUT", "/api/settings", {"ldap": {"enabled": False, "url": "", "base_dn": "", "clear_bind_password": True, "default_role": "user", "timeout_sec": 10}}, admin)
+    check(st == 200 and not sv["ldap"]["enabled"] and not sv["ldap"]["has_bind_password"], "ldap disabled, bind password cleared")
+
     print("== JWT: deleted user / role change")
     st, _, _ = req("PUT", f"/api/users/{bob_u['id']}", {"role": "admin"}, admin)
     st, me, _ = req("GET", "/api/me", token=bob)

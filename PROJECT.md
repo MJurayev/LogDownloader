@@ -37,6 +37,7 @@ Backend Go bilan yozilgan single static binary (React frontend `embed.FS` orqali
 
 ### Xavfsizlik va ekspluatatsiya
 - JWT (72h), bcrypt; user har so'rovda store'dan tekshiriladi (o'chirilgan user → darhol 401, rol o'zgarishi darhol).
+- **LDAP / Active Directory** (admin Settings): server URL (ldap/ldaps, StartTLS), service bind, base DN, user filtri, admin va ruxsat guruhlari (nested ham), default rol; "Ulanishni tekshirish" va "Kirish testi". Lokal paroli bor user lokal kiradi, qolganlar LDAP orqali; LDAP user birinchi kirishda yaratiladi.
 - **Login himoyasi** (brute-force: IP va user+IP bo'yicha), **download token** (5 daqiqalik, job'ga bog'langan, URL'da sessiya JWT yo'q).
 - **Audit log** (`audit.jsonl`): kirish, export, yuklab olish, share (public yuklab olish IP bilan), rejalar, userlar, datasource, sozlamalar — admin sahifada filtr + JSONL yuklab olish.
 - **`/healthz`, `/readyz`, `/metrics`** (Prometheus) — auth'siz.
@@ -133,7 +134,7 @@ Hammasi `Authorization: Bearer <jwt>` talab qiladi, faqat `POST /api/login`, `GE
 | GET/POST/PUT/DELETE | `/api/schedules[/{id}]`, POST `/api/schedules/{id}/run` | auth / owner | Rejali exportlar |
 | GET/POST/PUT/DELETE | `/api/users[/{id}]` | admin | User CRUD |
 | GET | `/api/audit`, `/api/audit/download` | admin | Audit |
-| GET/PUT | `/api/settings`, POST `/api/settings/notify/test` | admin | Retention, worker, notify, public_url |
+| GET/PUT | `/api/settings`, POST `/api/settings/notify/test`, POST `/api/settings/ldap/test` | admin | Retention, worker, notify, public_url, LDAP |
 | GET | `/healthz`, `/readyz`, `/metrics` | public | Health, Prometheus |
 
 ---
@@ -152,7 +153,7 @@ export_chunk_mb: 100    # avtomatik bo'laklash: .tar.gz ichidagi bitta qism (MB)
 
 Env: `HOST`, `PORT`, `DATA_DIR`, `JWT_SECRET`, `EXPORT_CHUNK_MB`. **systemd service env bermaydi** — config.yaml ishlaydi.
 
-Qolgan sozlamalar (retention, kvota, navbat, bildirishnoma kanallari, tashqi manzil) — admin UI'da, `settings.json` da.
+Qolgan sozlamalar (retention, kvota, navbat, bildirishnoma kanallari, LDAP, tashqi manzil) — admin UI'da, `settings.json` da.
 
 ---
 
@@ -182,6 +183,7 @@ Release: `v*` tag → [.github/workflows/release.yml](.github/workflows/release.
 ## Xavfsizlik / cheklovlar
 
 - Default admin paroli `admin` — birinchi kirgandan keyin Profil'dan o'zgartiring.
+- LDAP bind paroli ham `settings.json` da plain; LDAP userlarning paroli saqlanmaydi (har kirishda LDAP bind).
 - CORS `*`. Datasource paroli, Telegram token, SMTP parol diskda plain (`settings.json`), API'da qaytmaydi.
 - Download token URL'da (5 min, faqat shu job) — reverse-proxy logiga tushsa ham zarar minimal.
 - `/api/query` `limit + offset` ni VictoriaLogs'dan oladi va xotirada kesadi — katta offset'larda og'irlik.
