@@ -26,6 +26,7 @@ export default function Layout({ user, onLogout }: Props) {
 
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
   const otherLang: Lang = lang === "uz" ? "ru" : "uz";
+  const isAdmin = user?.role === "admin";
 
   return (
     <div className="app">
@@ -34,28 +35,23 @@ export default function Layout({ user, onLogout }: Props) {
         <div className="sidebar-nav">
           <NavLink to="/" end>{t("navLogViewer")}</NavLink>
           <NavLink to="/jobs">{t("navJobs")}</NavLink>
+          <NavLink to="/schedules">{t("navSchedules")}</NavLink>
           <NavLink to="/settings">{t("navSettings")}</NavLink>
-          {user?.role === "admin" && <NavLink to="/users">{t("navUsers")}</NavLink>}
+          {isAdmin && <NavLink to="/users">{t("navUsers")}</NavLink>}
+          {isAdmin && <NavLink to="/audit">{t("navAudit")}</NavLink>}
+          <NavLink to="/profile">{t("navProfile")}</NavLink>
         </div>
         <div className="sidebar-user">
           <div className="sidebar-user-info">
             <span className="sidebar-username">{user?.username}</span>
-            <span className={`sidebar-role ${user?.role === "admin" ? "role-admin" : ""}`}>{user?.role}</span>
+            <span className={`sidebar-role ${isAdmin ? "role-admin" : ""}`}>{user?.role}</span>
           </div>
-          <button
-            className="sidebar-theme-toggle sidebar-lang-toggle"
-            onClick={() => setLang(otherLang)}
-            title={t("langSwitchTitle")}
-          >
+          <button className="sidebar-theme-toggle sidebar-lang-toggle" onClick={() => setLang(otherLang)} title={t("langSwitchTitle")}>
             <span className={`lang-opt ${lang === "uz" ? "active" : ""}`}>UZ</span>
             <span className="lang-sep">/</span>
             <span className={`lang-opt ${lang === "ru" ? "active" : ""}`}>RU</span>
           </button>
-          <button
-            className="sidebar-theme-toggle"
-            onClick={toggleTheme}
-            title={theme === "dark" ? t("themeLight") : t("themeDark")}
-          >
+          <button className="sidebar-theme-toggle" onClick={toggleTheme} title={theme === "dark" ? t("themeLight") : t("themeDark")}>
             <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
             <span>{theme === "dark" ? t("themeLight") : t("themeDark")}</span>
           </button>

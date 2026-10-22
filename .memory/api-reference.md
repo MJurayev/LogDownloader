@@ -1,224 +1,166 @@
 # HTTP API Reference
 
-Barcha endpointlar [handler.go](../backend/internal/handler/handler.go)'da. Auth Bearer JWT majburiy, `/api/login` va `/dl/{token}`'dan tashqari. Middleware token'dagi `user_id` bo'yicha userni **store'dan** o'qiydi (o'chirilgan user → 401 `user not found`; rol store'dan olinadi).
+Handlerlar [backend/internal/handler/](../backend/internal/handler/) da (fayllar bo'yicha). Auth Bearer JWT majburiy, `/api/login`, `/dl/...`, `/healthz`, `/readyz`, `/metrics` dan tashqari. Middleware token'dagi `user_id` bo'yicha userni **store'dan** o'qiydi (o'chirilgan user → 401; rol store'dan). Xatolar plain text.
 
-## Auth
+## Auth / profil
 
 ### POST `/api/login`
 ```json
-// req
 { "username": "admin", "password": "admin" }
-
-// 200
-{ "token": "<jwt>", "user_id": "uuid", "username": "admin", "role": "admin" }
-
-// 401: "invalid credentials"
+→ 200 { "token": "<jwt>", "user_id": "uuid", "username": "admin", "role": "admin" }
 ```
+401 `invalid credentials`. **Rate limit:** IP bo'yicha 30 so'rov/min → 429 `too many requests` (Retry-After 60); bitta user+IP uchun 5 xato / 15 min → 429 `too many failed attempts...` (Retry-After 900). Audit: `login.ok` / `login.fail` / `login.blocked`.
 
 ### GET `/api/me`
+`{ user_id, username, role, email, telegram_chat_id, notify_on_done }` (store'dan).
+
+### PUT `/api/me`
 ```json
-// 200 — store'dagi joriy qiymatlar (rol o'zgargan bo'lsa yangisi)
-{ "user_id": "uuid", "username": "admin", "role": "admin" }
+{ "email": "a@b", "telegram_chat_id": "123", "notify_on_done": true,
+  "current_password": "...", "new_password": "..." }
 ```
+Maydonlar ixtiyoriy (pointer semantikasi: berilmagani o'zgarmaydi). Parol o'zgarishi uchun `current_password` to'g'ri bo'lishi shart (403), `new_password` ≥ 6 belgi (400). Audit `profile.update` / `password.change`.
 
 ## Datasources
 
 ### GET `/api/datasources`
-Qaytarilgan ro'yxat: user owner bo'lgan + `global: true` bo'lgan barcha datasource'lar. **`password` qaytarilmaydi**, o'rniga `has_password`.
-
+User owner bo'lgan + `global` datasource'lar. **`password` qaytarilmaydi**, o'rniga `has_password`.
 ```json
-[
-  {
-    "id": "uuid",
-    "name": "Prod VL",
-    "url": "http://victorialogs:9428",
-    "username": "basic-auth-user",
-    "has_password": true,
-    "headers": { "X-Tenant": "team-a" },
-    "global": false,
-    "owner_id": "user-uuid"
-  }
-]
+[{ "id", "name", "url", "username", "has_password": true, "headers": {...},
+   "account_id": "7", "project_id": "", "global": false, "owner_id" }]
+```
+`account_id` / `project_id` — VictoriaLogs multitenancy header'lari (`AccountID`, `ProjectID`), ikkalasi ixtiyoriy.
+
+### POST `/api/datasources` — yaratish (`url` majburiy; `global` faqat admin). Audit `datasource.create`.
+### PUT `/api/datasources/{id}` — owner/admin. `username` bo'sh bo'lmasa va `password` bo'sh bo'lsa mavjud parol saqlanadi; `username` bo'sh → parol o'chadi. Audit `datasource.update`.
+### DELETE `/api/datasources/{id}` — owner/admin. Audit `datasource.delete`.
+### POST `/api/datasources/test`
+Body — Datasource (saqlanmagan bo'lishi mumkin). `id` berilsa va parol bo'sh bo'lsa saqlangan parol ishlatiladi. `/select/logsql/query?query=*&limit=1` ga 10s timeout.
+```json
+→ { "ok": true, "status": 200, "latency_ms": 12 }   |   { "ok": false, "latency_ms": 10003, "error": "..." }
 ```
 
-### POST `/api/datasources`
-Body — Datasource (id/owner_id e'tibordan chiqariladi, server o'rnatadi). `global: true` faqat admin'da saqlanadi, oddiy user'da `false`'ga qaytariladi. Javob — yuqoridagi shakl (parolsiz).
+## Saved Queries — `GET/POST /api/queries`, `PUT/DELETE /api/queries/{id}` (owner/admin; `global` faqat admin). Audit `query.create` / `query.delete`.
 
-### PUT `/api/datasources/{id}`
-Owner yoki admin. Body — Datasource (id/owner_id preserve qilinadi). `global` faqat admin'da o'zgaradi. **Parol semantikasi:** `username` bo'sh bo'lmasa va `password` bo'sh/yo'q bo'lsa — mavjud parol saqlanib qoladi; `username` bo'sh bo'lsa parol ham tozalanadi. 404 — topilmasa, 403 — owner emas.
+## Log viewer (VictoriaLogs proxy'lari)
 
-### DELETE `/api/datasources/{id}`
-Owner yoki admin. Aks holda 403. Saqlash xatosi — 500.
+Hammasida `datasource_id` majburiy (foydalanuvchiga ko'rinadigan bo'lishi shart), `query` (default `*`), `start`/`end` ixtiyoriy RFC3339 UTC.
 
-## Saved Queries
+| Endpoint | Qo'shimcha | VictoriaLogs | Javob |
+|---|---|---|---|
+| `GET /api/query` | `limit` (≤1000, default 50), `offset`, `sort` asc/desc | `/select/logsql/query` (`limit+offset`) | `{logs, total, has_more, limit, offset}`; `offset=0` → tarixga yoziladi |
+| `GET /api/fields` | — | `/select/logsql/field_names` | `{values:[{value,hits}]}` |
+| `GET /api/field_values` | `field` (majburiy), `limit` (20) | `/select/logsql/field_values` | `{values}` |
+| `GET /api/streams` | `limit` (50) | `/select/logsql/streams` | `{values}` |
+| `GET /api/hits` | `step` (bo'sh → ~60 bucket: oraliq/60 ni "chiroyli" qadamga yaxlitlab, masalan 6h → `600s`) | `/select/logsql/hits` | `{timestamps[], values[], total, step}` |
+| `GET /api/tail` | — | `/select/logsql/tail` | `application/x-ndjson` chunked oqim, har qatorda flush; client uzilsa upstream ham yopiladi |
 
-### GET `/api/queries`
-User'niki + global'lar.
+`sort` — server `\| sort by (_time)[ desc]` qo'shadi, query'da `\|` bo'lsa qo'shmaydi.
 
-### POST `/api/queries`
-```json
-{ "name": "Errors last hour", "query": "_time:1h AND level:error", "datasource_id": "uuid", "global": false }
-```
+### GET `/api/history` → `[{query, datasource_id, at}]` (eng yangisi birinchi, 50 ta). DELETE — tozalash.
 
-### PUT `/api/queries/{id}`
-Owner yoki admin. Body — SavedQuery (id/owner_id preserve qilinadi). `global` faqat admin'da o'zgartiriladi. 404 — topilmasa.
-
-### DELETE `/api/queries/{id}`
-Owner/admin tekshiruvi `handler.go`'da — ID topilmasa ham 204 (idempotent).
-
-## Log query (VictoriaLogs proxy)
-
-### GET `/api/query`
-| param | mavzu |
-|-------|-------|
-| `query` | LogsQL — majburiy |
-| `datasource_id` | majburiy |
-| `limit` | default 50 |
-| `offset` | default 0 |
-| `start` / `end` | ixtiyoriy RFC3339 UTC — bo'sh bo'lsa cheksiz |
-| `sort` | `asc` yoki `desc` — `_time` bo'yicha. Server query'ga `\| sort by (_time)[desc]` pipe qo'shadi. Agar user query'sida `\|` mavjud bo'lsa avtomatik sort qo'shilmaydi. |
-
-Server VictoriaLogs `/select/logsql/query`'dan `limit+offset` qator oladi, NDJSON'ni o'qib, in-memory slice qiladi:
-
-```json
-{
-  "logs": [ { "_time": "...", "_msg": "...", "level": "info", "...": "..." } ],
-  "total": 123,
-  "has_more": true,
-  "limit": 50,
-  "offset": 0
-}
-```
-
-`has_more = total == limit+offset` — bu approximation.
-
-## Export jobs
+## Export
 
 ### POST `/api/export`
 ```json
-// req
 {
-  "query": "...",
-  "datasource_id": "uuid",
-  "start": "2026-05-21T05:00:00Z",
-  "end": "2026-05-21T05:30:00Z",
-  "sort_order": "asc",
-  "name": "prod-errors",
-  "format": "tar.gz"
+  "query": "...", "datasource_id": "uuid",
+  "start": "2026-05-21T05:00:00Z", "end": "2026-05-21T05:30:00Z",   // ixtiyoriy
+  "sort_order": "asc",                 // asc | desc | ""
+  "name": "prod-errors",               // fayl nomi prefiksi (ixtiyoriy)
+  "format": "tar.gz",                  // tar.gz (default, bo'sh/noma'lum ham) | log.gz | log
+  "content": "ndjson",                 // ndjson (default) | msg | csv
+  "fields": ["_time","level"],         // ndjson: faqat shu maydonlar; csv: ustunlar (bo'sh → _time,_stream,_msg); msg: e'tiborsiz
+  "archive_split_mb": 1024,            // faqat tar.gz: siqilgan hajm chegarasi → _volNNN.tar.gz; 0 = cheksiz
+  "notify": true,                      // tugaganda egasiga xabar (profil manzillari + admin kanallari)
+  "auto_share": true                   // tugaganda 7 kunlik, cheksiz share link (share_url)
 }
-
-// 200
-{ "job_id": "job_1714000000000000000" }
+→ 200 { "job_id": "job_1714000000000000000" }
 ```
-`start`/`end` ixtiyoriy (RFC3339 UTC). `sort_order`: `"asc"` | `"desc"` | `""`. `format`: `"tar.gz"` (default — **bo'sh yoki noma'lum qiymat ham `tar.gz`**), `"log.gz"`, `"log"`. UI'da tanlanadi (default `tar.gz`). **Bo'laklash parametri yo'q** — doim avtomatik (server config `export_chunk_mb`). `datasource_id` mavjud bo'lmasa 404. Job egasi = joriy user (`owner_id`, `owner_name`).
+Job `queued` holatida yaratiladi; `datasource_id` ko'rinmasa 404. Audit `export.start`.
 
-`name` — fayl nomi (ixtiyoriy): bo'sh bo'lsa `export` prefix. Server `sanitizeFileName` orqali tozalaydi va doim oxiriga UTC timestamp + format suffix qo'shadi. Misol: `my-prod-logs` → `my-prod-logs_20260521-090655-123.tar.gz`.
+**Fayl nomi:** `sanitizeFileName` → `<name>_<UTC ts>` + suffix: tar.gz → `.tar.gz`; log.gz → `.log.gz` / `.csv.gz`; log → `.log` / `.csv`.
 
-**Format implementatsiyasi (worker.go):**
-- `tar.gz` — ikki bosqich: oldin xom faylni `.tmp`'ga yozadi (tar header'i size talab qiladi), keyin `.tar.gz` quradi va `.tmp`'ni o'chiradi. **Avtomatik bo'laklash:** `partTracker` streaming paytida qator chegarasida qism chegaralarini belgilaydi (xom hajm `export_chunk_mb` × 1 MiB dan oshganda); natija ≥2 qism bo'lsa arxiv ichida `<nom>_part001.log`, `_part002.log`, …, aks holda bitta `<nom>.log`. `parts` job maydonida. Bitta qator limitdan katta bo'lsa o'zi alohida qism.
-- `log.gz` — `bufio.Writer` → `gzip.Writer` → fayl, streaming
-- `log` — `bufio.Writer` → fayl, streaming
-
-Streaming `vlclient.DoLongRunning(ctx, ...)` orqali; job o'chirilsa ctx bekor qilinadi. Job `size` — diskdagi yakuniy fayl hajmi.
+**Dvigatel (worker/):** vaqt oynalari (≤2h bitta; ≤48h 1h; ≤14d 6h; aks holda 24h; ochiq boshlanish → earliest probe), `total_estimate` (hits), har oyna 3 marta retry (5xx/tarmoq) + rollback, `rawSink` (tarkib + qism chegaralari `export_chunk_mb`), paketlash (qismlar `<nom>_partNNN.<ext>`, volumelar).
 
 ### GET `/api/jobs`
-**Oddiy user faqat o'z joblarini**, admin hammasini ko'radi. `created_at` DESC.
-
+Oddiy user faqat o'z joblarini, admin hammasini; `created_at` DESC.
 ```json
-[
-  {
-    "id": "job_...",
-    "owner_id": "user-uuid",
-    "owner_name": "admin",
-    "query": "...",
-    "datasource_id": "uuid",
-    "datasource_name": "Prod VL",
-    "status": "running" | "done" | "failed",
-    "file_name": "export_20260521-090655-123.tar.gz",
-    "created_at": "2026-...",
-    "error": "",
-    "lines": 12345,
-    "start": "...", "end": "...", "sort_order": "asc",
-    "format": "tar.gz",
-    "size": 1048576,
-    "parts": 3
-  }
-]
+[{
+  "id", "owner_id", "owner_name", "query", "datasource_id", "datasource_name",
+  "status": "queued|running|done|failed",
+  "file_name": "x_20260521-090655-123.tar.gz",     // birinchi fayl
+  "files": [{ "name", "size", "parts" }],           // done'da; volumelar bo'lsa bir nechta
+  "created_at", "started_at", "finished_at", "error",
+  "lines", "size", "parts",
+  "start", "end", "sort_order", "format", "content", "fields", "archive_split_mb",
+  "total_estimate": 123456, "windows_total": 24, "windows_done": 7, "retries": 1,
+  "schedule_id", "notify", "auto_share", "share_url"
+}]
+```
+Progress (`lines`, `windows_done`, `retries`, `total_estimate`) faqat xotirada yangilanadi, holat o'zgarishi diskka yoziladi.
+
+### DELETE `/api/jobs/{id}` — owner/admin; queued → navbatdan, running → cancel; fayllar + share'lar o'chadi. Audit `job.delete`.
+
+### POST `/api/jobs/{id}/download-token` → `{ "token", "expires_in": 300 }`
+### GET `/api/jobs/{id}/download?dt=<token>&file=<nom>`
+`dt` — download token (typ=download, aynan shu job uchun; Bearer header ham ishlaydi). `file` — `files[]` dagi nom (default `file_name`). `http.ServeFile` (Range bor). Audit `job.download`. Eski `?token=<jwt>` **qabul qilinmaydi**.
+
+### GET `/api/stats`
+```json
+{ "exports_bytes", "exports_files", "jobs": {"queued","running","done","failed"},
+  "retention": {"days", "quota_gb"}, "worker": {"max_concurrent","running","queued"} }
 ```
 
-### DELETE `/api/jobs/{id}`
-Owner yoki admin (404 / 403). Running bo'lsa worker to'xtatiladi (`worker.Cancel`), fayl + `.tmp` + share'lar o'chadi, `jobs.json` yangilanadi.
+## Share links (owner/admin)
 
-### GET `/api/jobs/{id}/download`
-Owner yoki admin. `Content-Disposition: attachment` bilan fayl (`http.ServeFile`, Range bor). Status `done` emas — 400.
-
-**Auth:** `Authorization: Bearer <jwt>` standart yo'l. Brauzer `<a href download>` Authorization yubora olmagani sababli, **bu endpoint** uchun `?token=<jwt>` query param ham qabul qilinadi (auth middleware'da `strings.HasSuffix(path, "/download")` tekshiruvi).
-
-## Share links
-
-Public download URL (`/dl/{token}`) auth talab qilmaydi. Create/get/revoke — **job egasi yoki admin** (403 aks holda).
-
-**1 share per job** qoidasi: yangi share yaratilsa, mavjud share avtomatik bekor qilinadi.
-
-### POST `/api/jobs/{id}/share`
+### POST `/api/jobs/{id}/share` `{ "max_downloads": 5, "expires_at": "RFC3339" }` (0 / bo'sh = cheksiz; job done bo'lishi shart)
 ```json
-// req
-{
-  "max_downloads": 5,                      // 0 = cheksiz
-  "expires_at": "2026-05-22T10:00:00Z"     // RFC3339 UTC, bo'sh = cheksiz
-}
-
-// 201
-{
-  "token": "LmKTeynWiJTEtIiBuakjrw",
-  "job_id": "job_...",
-  "created_by": "<user-id>",
-  "created_at": "...",
-  "expires_at": "2026-05-22T10:00:00Z",
-  "max_downloads": 5,
-  "download_count": 0,
-  "url": "http://server/dl/LmKTeynWiJTEtIiBuakjrw"
-}
+→ 201 { "token", "job_id", "created_by", "created_at", "expires_at", "max_downloads", "download_count",
+        "url": "<public_url yoki so'rov host>/dl/<token>",
+        "files": [{ "name", "url": ".../dl/<token>", "size" }, { "name", "url": ".../dl/<token>/2", "size" }] }
 ```
-`expires_at` o'tmishda bo'lsa 400. Job `done` emas — 400.
+1 share per job. `public_url` (admin settings) bo'lsa URL shundan. Audit `share.create` / `share.revoke`.
+### GET `/api/jobs/{id}/share` — joriy share yoki 404. DELETE — bekor (fayl qolmaydi o'chmaydi).
 
-### GET `/api/jobs/{id}/share`
-Job uchun joriy share ma'lumotini qaytaradi yoki 404.
+### GET `/dl/{token}` va `/dl/{token}/{n}` (public)
+`n` — 1-asosli fayl indeksi (volumelar). Range yo'q (`Accept-Ranges: none`), har so'rov = 1 yuklab olish. Muddat/limit → 410, yo'q → 404; limit yetganda share+job+fayllar o'chadi. Audit `share.download` (IP bilan, user yo'q). Fon: har 1 daqiqada muddati o'tganlar tozalanadi.
 
-### DELETE `/api/jobs/{id}/share`
-Share'ni bekor qiladi. Yo'q bo'lsa 204 (idempotent). Revoke fayl/job'ni o'chirmaydi (faqat link bekor bo'ladi).
+## Schedules
 
-### GET `/dl/{token}`
-Public download. **Range qo'llab-quvvatlanmaydi** — `Accept-Ranges: none`, `Range` header e'tiborsiz, doim to'liq fayl 200 bilan. Sabab: har HTTP so'rov = bitta yuklab olish; download-manager'larning parallel chunk'lari limitni bir zumda tugatib faylni o'chirardi.
-
-Mantiq (atomik, store mutex ostida):
-1. Token bo'yicha share qidirish; yo'q bo'lsa 404
-2. `expires_at` o'tgan bo'lsa → share/job/fayl o'chiriladi, 410 Gone
-3. `download_count >= max_downloads` (max > 0) bo'lsa → o'chadi, 410 Gone
-4. Bog'liq job yo'q yoki `done` emas → o'chadi, 404
-5. `download_count++`, persist
-6. Fayl `io.Copy` bilan oqim qilinadi (`Content-Length` bor)
-7. Agar limit yetgan bo'lsa serve qilingandan keyin share+job+fayl o'chiriladi
-
-### Background cleanup
-Server `time.Ticker(1 * time.Minute)` orqali `s.CleanupExpiredShares()` ni chaqiradi. Startup'da `RecoverJobs` egasiz (job yo'q yoki done emas) share'larni ham olib tashlaydi.
-
-## Users (admin only)
-
-### GET `/api/users`
-Parolsiz ro'yxat.
-
-### POST `/api/users`
+### GET `/api/schedules` — o'ziniki (admin: hammasi).
+### POST `/api/schedules`, PUT `/api/schedules/{id}` (owner/admin)
 ```json
-{ "username": "alice", "password": "...", "role": "user" | "admin" }
+{ "name": "daily-errors", "query": "level:error", "datasource_id": "uuid",
+  "cron": "5 0 * * *",            // 5 maydon (min hour dom month dow; *, n, a-b, */n, ro'yxat) yoki @hourly/@daily/@weekly/@monthly
+  "lookback_minutes": 1440, "align": true,   // [now-lookback, now]; align → lookback'ka tekislangan (kechagi 00:00–24:00)
+  "sort_order": "asc", "format": "tar.gz", "content": "ndjson", "fields": [], "archive_split_mb": 0,
+  "notify": true, "auto_share": true, "enabled": true }
+→ Schedule (+ owner_id, owner_name, created_at, next_run_at, last_run_at, last_job_id, last_error)
 ```
-`role` bo'sh bo'lsa `user`. Mavjud username — 409.
+Noto'g'ri cron → 400. `enabled=false` → `next_run_at` null. Audit `schedule.create/update/delete`.
+### DELETE `/api/schedules/{id}`; POST `/api/schedules/{id}/run` → `{ "job_id" }` (reja vaqtiga ta'sir qilmaydi). Audit `schedule.run`.
+Scheduler har 30s: `next_run_at <= now` → export (`schedule_id`, nom = reja nomi), keyingi vaqt hisoblanadi; server o'chiq paytda o'tkazib yuborilgan run bitta marta qoplanadi.
 
-### PUT `/api/users/{id}`
+## Users (admin) — `GET/POST /api/users`, `PUT/DELETE /api/users/{id}`
+POST `{username, password, role, email}`; PUT `{role, password, email}` (bo'sh = o'zgarmaydi). O'zini o'chirish 400. Audit `user.create/update/delete`.
+
+## Audit (admin)
+### GET `/api/audit?limit=100&offset=0&action=&user=` → `{ entries:[{time,user_id,user,action,target,ip,details}], total, limit, offset }` (eng yangisi birinchi; filtr substring).
+### GET `/api/audit/download` — joriy `audit.jsonl`.
+Amallar: `login.ok|fail|blocked`, `profile.update`, `password.change`, `user.*`, `datasource.*`, `query.create|delete`, `export.start`, `job.delete|download`, `share.create|revoke|download`, `schedule.*`, `settings.update`, `audit.download`.
+
+## Settings (admin)
+### GET `/api/settings`
 ```json
-{ "role": "admin", "password": "newpass" }
+{ "retention": {"days": 30, "quota_gb": 0}, "worker": {"max_concurrent": 2}, "public_url": "",
+  "notify": { "has_telegram_token": false, "webhook_url": "",
+              "smtp": {"host","port","username","has_password","from","starttls"} },
+  "export_chunk_mb": 100 }
 ```
-`role` bo'sh bo'lsa o'zgarmaydi. `password` bo'sh bo'lsa eski parol qoladi. Username immutable. 404 — topilmasa. Rol o'zgarishi userning mavjud tokeni bilan keyingi so'rovdan kuchga kiradi.
+### PUT `/api/settings` — qisman: `retention`, `worker` (1..64), `public_url`, `notify.telegram_bot_token` (bo'sh = o'zgarmaydi, `clear_telegram_token: true` = o'chirish), `notify.webhook_url`, `notify.smtp` (`password` bo'sh = o'zgarmaydi, `clear_password`). Worker uyg'otiladi. Audit `settings.update`.
+### POST `/api/settings/notify/test` `{ "channel": "telegram|email|webhook" }` → `{ ok, error }` (qabul qiluvchi — joriy admin profili).
 
-### DELETE `/api/users/{id}`
-O'zini o'chirishga ruxsat berilmaydi (400). O'chirilgan userning tokeni darhol 401 qaytaradi.
+## System (auth'siz)
+- `GET /healthz`, `/readyz` → `{ status: "ok", version, uptime, worker: {running, queued} }`
+- `GET /metrics` — Prometheus text: `logdownloader_build_info`, `uptime_seconds`, `exports_total{status}`, `export_lines_total`, `export_bytes_total`, `export_window_retries_total`, `jobs{status}`, `worker_running/queued/max_concurrent`, `exports_dir_bytes/files`, `schedules`, `audit_entries`, `http_requests_total{class}`, `notifications_total{status}`, `login_failures_total`, `login_blocked_total`, `go_goroutines`.

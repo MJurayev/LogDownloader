@@ -23,8 +23,8 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
       localStorage.setItem("user", JSON.stringify({ user_id: res.user_id, username: res.username, role: res.role }));
       onLogin();
       navigate("/");
-    } catch {
-      setError(t("loginError"));
+    } catch (err) {
+      setError(err instanceof Error && err.message === "blocked" ? t("loginBlocked") : t("loginError"));
     } finally {
       setLoading(false);
     }

@@ -1,113 +1,55 @@
 # Data Model & Storage
 
-Storage — disk ustida JSON fayllar. Library yo'q, faqat `encoding/json` + `os.WriteFile`. Hammasi [store.go](../backend/internal/store/store.go)'da `sync.RWMutex` ostida.
+Storage — disk ustida JSON fayllar (`encoding/json` + `os.WriteFile`), [backend/internal/store/](../backend/internal/store/) da bitta `sync.RWMutex` ostida (audit uchun alohida mutex). Getter'lar **nusxa** qaytaradi.
 
 ## Disk layout
 
 ```
 <DataDir>/                  (default: /var/lib/logdownloader)
-├── settings.json           # model.Settings  { datasources: [...] }
+├── settings.json           # model.Settings { datasources[], retention, worker, notify, public_url }
+├── users.json              # map[id]User (bcrypt + email/telegram/notify_on_done)
 ├── queries.json            # map[id]SavedQuery
-├── users.json              # map[id]User (parol bcrypt hash bilan!)
-├── jobs.json               # map[id]ExportJob (yakuniy holatlar; progress yozilmaydi)
+├── jobs.json               # map[id]ExportJob (holatlar; progress yozilmaydi)
 ├── shares.json             # map[token]ShareLink
-├── jwt_secret              # 32 bayt hex, 0600 (auto-generate)
+├── schedules.json          # map[id]Schedule
+├── history.json            # map[userID][]HistoryEntry (50 ta)
+├── audit.jsonl             # append-only; 20 MB da → audit-<ts>.jsonl (3 ta eski saqlanadi)
+├── jwt_secret              # 32 bayt hex, 0600
 └── exports/
-    └── <nom>_<UTC ts>.tar.gz   # ichida <nom>.log yoki <nom>_partNNN.log qismlar (avtomatik bo'laklash)
+    ├── <nom>_<UTC ts>.tar.gz             # ichida <nom>.log|csv yoki <nom>_partNNN.log|csv
+    ├── <nom>_<UTC ts>_volNNN.tar.gz      # archive_split_mb bo'lsa (qismlar global raqamlanadi)
+    ├── <nom>_<UTC ts>.log.gz | .csv.gz | .log | .csv
+    └── *.tmp                             # running paytida xom oqim (recovery o'chiradi)
 ```
 
-Eslatma: `settings.json` array shape'da (Settings struct ichida slice), qolganlari map shape'da. Bu nomuvofiqlik tarixiy.
+## Tip ta'riflari — [`model/models.go`](../backend/internal/model/models.go)
 
-## Tip ta'riflari
-
-[`backend/internal/model/models.go`](../backend/internal/model/models.go) — to'liq ta'rif.
-
-### User
-```go
-type User struct {
-    ID       string  // uuid
-    Username string  // unique
-    Password string  // bcrypt hash; JSON response'da `omitempty`
-    Role     Role    // "admin" | "user"
-}
-```
-
-### Datasource
-```go
-type Datasource struct {
-    ID       string
-    Name     string
-    URL      string             // VictoriaLogs base (e.g. http://...:9428)
-    Username string             // basic auth
-    Password string             // plain (!) — disk'da shifrlanmagan; API javobida qaytmaydi
-    Headers  map[string]string  // custom HTTP headers
-    Global   bool               // true bo'lsa hammaga ko'rinadi (faqat admin yarata oladi)
-    OwnerID  string
-}
-```
-API javobi `handler.datasourceView` — `Password` tashlab, `HasPassword bool` qo'shadi.
-
-### SavedQuery
-```go
-type SavedQuery struct {
-    ID           string
-    Name         string
-    Query        string
-    DatasourceID string  // ixtiyoriy
-    Global       bool
-    OwnerID      string
-}
-```
-
-### ExportJob (jobs.json'da persist)
-```go
-type ExportJob struct {
-    ID             string     // "job_<unixnano>"
-    OwnerID        string     // kim boshlagan
-    OwnerName      string     // username snapshot
-    Query          string
-    DatasourceID   string
-    DatasourceName string     // snapshot
-    Status         JobStatus  // "running" | "done" | "failed"
-    FileName       string     // "<nom>_<UTC ts>.tar.gz"
-    CreatedAt      time.Time
-    Error          string
-    Lines          int64      // har 1000'da incremental update (faqat xotirada)
-    Start, End     string     // RFC3339 UTC, ixtiyoriy
-    SortOrder      string
-    Format         string     // "tar.gz" (default) | "log.gz" | "log" — StartExport'da normalizatsiya
-    Size           int64      // yakuniy fayl hajmi
-    Parts          int        // .tar.gz ichidagi qismlar soni (omitempty); log/log.gz = 1
-}
-```
-
-### ShareLink (shares.json)
-```go
-type ShareLink struct {
-    Token         string     // URL-safe base64, 16 bayt
-    JobID         string
-    CreatedBy     string
-    CreatedAt     time.Time
-    ExpiresAt     *time.Time // nil = cheksiz
-    MaxDownloads  int        // 0 = cheksiz
-    DownloadCount int
-}
-```
+- **User**: `ID, Username, Password(bcrypt), Role, Email, TelegramChatID, NotifyOnDone`.
+- **Datasource**: `ID, Name, URL, Username, Password(plain), Headers, AccountID, ProjectID, Global, OwnerID`. API javobi `datasourceView` — `Password` tashlanadi, `HasPassword` qo'shiladi.
+- **Settings**: `Datasources[]`, `Retention{Days, QuotaGB}` (0 = o'chiq; birinchi ishga tushishda Days=30), `Worker{MaxConcurrent}` (default 2), `Notify{TelegramBotToken, SMTP{Host,Port,Username,Password,From,StartTLS}, WebhookURL}`, `PublicURL`.
+- **SavedQuery**: `ID, Name, Query, DatasourceID?, Global, OwnerID`.
+- **ExportJob**: `ID("job_<unixnano>"), OwnerID, OwnerName, Query, DatasourceID, DatasourceName, Status(queued|running|done|failed), FileName(birinchi fayl), Files[]{Name,Size,Parts}, CreatedAt, StartedAt, FinishedAt, Error, Lines, Start, End, SortOrder, Format(tar.gz|log.gz|log), Content(ndjson|msg|csv), Fields[], ArchiveSplitMB, Size(jami), Parts(jami), TotalEstimate, WindowsTotal, WindowsDone, Retries, ScheduleID, Notify, AutoShare, ShareURL`.
+- **ShareLink**: `Token, JobID, CreatedBy, CreatedAt, ExpiresAt?, MaxDownloads(0=∞), DownloadCount`.
+- **Schedule**: `ID, OwnerID, OwnerName, Name, Query, DatasourceID, Cron, LookbackMinutes, Align, SortOrder, Format, Content, Fields, ArchiveSplitMB, Notify, AutoShare, Enabled, CreatedAt, LastRunAt, LastJobID, LastError, NextRunAt`.
+- **AuditEntry**: `Time, UserID, User, Action, Target, IP, Details`.
+- **HistoryEntry**: `Query, DatasourceID, At`.
 
 ## Invariantlar
 
-- **Getter'lar nusxa qaytaradi.** `GetSettings`/`GetDatasourcesForUser` — chuqur nusxa (slice + Headers map), `GetDatasource`/`GetJob`/`GetShare*` — struct nusxasiga pointer, `GetJobsForUser` — `[]ExportJob` nusxalar. `SaveSettings` ham nusxa saqlaydi. Shu sababli handler store'ning ichki ma'lumotiga mutex'siz tegmaydi (oldin `settings.Datasources[i] = input` real data race edi). Store'ga ichki pointer qaytaruvchi metod qo'shmang.
-- **Settings file** doim Settings struct shape'da. Datasource'lar slice ichida, ID bo'yicha indexing yo'q.
-- **Map keys = ID** (queries, users, jobs); shares — token.
-- **`Global` flag faqat admin'da `true` bo'lib qoladi.** Handler oddiy user kelganda majburan `false`'ga qaytaradi.
-- **Owner-based access:** datasource/query — `GetDatasourcesForUser`/`GetQueriesForUser` filter (owner==user || global); job — `GetJobsForUser(ownerID, all)` (admin `all=true`), yozuvchi handlerlar `canAccessJob`.
-- **JobID format** — `fmt.Sprintf("job_%d", time.Now().UnixNano())`. Bir nano-second ichida ikkita export bo'lsa to'qnashishi mumkin (amaliyotda kam uchraydi).
-- **Jobs persist siyosati:** `AddJob`, `DeleteJob`, `UpdateJobStatus(done|failed)`, `purgeShareLocked` → `jobs.json`. `UpdateJobStatus(running, lines)` (progress) va `UpdateJobSize` diskka yozmaydi — yakuniy `done` yozuvi ularni qamrab oladi.
-- **`RecoverJobs()` (startup, main.go):** running qolgan joblar → failed (`"server qayta ishga tushdi, export uzildi"`), ularning fayli + `.tmp` o'chadi; `exports/` dagi hech qaysi jobga tegishli bo'lmagan fayllar (orphan) o'chadi; job'i yo'q yoki done bo'lmagan share'lar o'chadi.
-- **Worker HTTP — timeout'siz, lekin context bilan.** `vlclient.DoLongRunning(ctx, ...)` dedicated `http.Client{Timeout: 0}`; dial/TLS 30s. `worker.Cancel(jobID)` ctx'ni bekor qiladi — `DeleteJob` oldidan handler chaqiradi; worker chiqishda ctx bekor bo'lgan bo'lsa chala faylni o'chiradi.
+- **Getter'lar nusxa qaytaradi** (`GetSettings` chuqur: slice + Headers map; `GetDatasource`/`GetJob`/`GetShare*`/`GetSchedule` struct nusxa; ro'yxatlar `[]T` nusxa). `SaveSettings`/`SaveShare`/`SaveSchedule` ham nusxa saqlaydi. Handler store'ning ichki ma'lumotiga mutex'siz tegmaydi — ichki pointer qaytaruvchi metod qo'shmang (`-race` smoke testi buni ushlaydi).
+- **Yozuvchi mutatsiya** — `UpdateJob(id, persist, fn)`, `UpdateSchedule(id, fn)`, `UpdateSettings(fn)`: mutex ostida `fn` chaqiriladi.
+- **`Global` faqat admin'da `true`**; owner-based access: datasource/query filter (owner || global), job/schedule — `canAccessJob` / `loadScheduleForUser` (owner || admin), `canUseDatasource` (global || owner || admin).
+- **Jobs persist siyosati:** `AddJob`, `DeleteJob`, `UpdateJob(persist=true)` (queued→running, done/failed, share_url), `purgeShareLocked`, `PruneExports` → `jobs.json`. Progress (`Lines`, `WindowsDone`, `Retries`, `TotalEstimate`) `persist=false`.
+- **`RecoverJobs()` (startup):** running → failed (`server qayta ishga tushdi...`) + fayllar o'chadi; queued qoladi (worker `QueuedJobIDs` bilan tiklaydi); `exports/` dagi hech qaysi jobga tegishli bo'lmagan fayllar (orphan, `.tmp` ham) o'chadi; job'i yo'q/done bo'lmagan share'lar o'chadi.
+- **`PruneExports(days, quota)`:** done/failed `CreatedAt < now-days` → o'chadi; `Σ job.Size > quota` → eng eski done/failed'lar o'chadi (running/queued tegilmaydi). Har 10 daqiqa + startup.
+- **Share**: 1 share per job; `ConsumeShare(token, fileIndex)` atomik (tekshir → count++ → limit yetsa serve'dan keyin purge). Purge = share + job + fayllar.
+- **Audit**: `Audit()` xatoni yutadi (asosiy ishni to'xtatmaydi); `ReadAudit` joriy faylni to'liq o'qiydi (20 MB chegara).
+- **History**: dublikat query yuqoriga ko'chadi, 50 ta.
+- **Worker HTTP — timeout'siz, context bilan.** `DoLongRunning(ctx)`; `Cancel(jobID)` navbatdan oladi yoki ctx'ni bekor qiladi. Bekor qilingan job fayllari (`.tmp`, final, `_vol*`) worker chiqishida o'chadi.
+- **Sink rollback invarianti:** `mark()` bufferni flush qiladi → diskdagi hajm = mantiqiy offset; `rollback` = `bufW.Reset` + `Truncate(offset)` + `Seek` + tracker/lines restore. Shunda faqat joriy oyna tashlanadi (oldin flush bo'lmagani uchun oldingi oyna ma'lumoti yo'qolardi — tuzatilgan).
+- **Volumelar**: faqat `tar.gz`; chegara siqilgan baytlar (`countingWriter` faylga tushganlar, bufio/gzip ichidagilarsiz) ≥ limit bo'lganda **qism tugagach** keyingi volume; birinchi volume oxirida `_vol001` ga rename (agar >1).
 - **Store `saveFile` xatosi in-memory holatni qaytarmaydi** (atomar emas) — ma'lum trade-off.
-- **Avtomatik bo'laklash faqat `tar.gz`'da.** `worker.chunkBytes` (config `export_chunk_mb`, 0 = o'chiq). `UpdateJobResult(id, size, parts)` yakunda; `Parts` persist `done` yozuvi bilan.
 
 ## Migration / backward compat
 
-Hech qanday version field yo'q. Schema'ni o'zgartirsangiz mavjud installlardagi JSON o'qishni sindirishi mumkin. Eski (`jobs.json`'siz) o'rnatmada birinchi startup `exports/` dagi barcha fayllarni orphan deb o'chiradi — joblar avval xotirada edi, baribir yuklab bo'lmasdi. `owner_id`'siz eski job yozuvi bo'lsa (bo'lishi mumkin emas, lekin) faqat admin ko'radi.
+Version field yo'q. Yangi maydonlar `omitempty`/nol qiymat bilan eski JSON'dan o'qiladi: eski `jobs.json`'siz o'rnatmada `exports/` orphan deb tozalanadi; eski jobda `Files` bo'sh → `FileName` ishlatiladi (`jobFile`, `ConsumeShare` fallback); `Content` bo'sh → ndjson; `Retention.Days` 0 va `settings.json` mavjud bo'lsa 0 (o'chiq) qoladi — faqat birinchi yaratilishda 30.

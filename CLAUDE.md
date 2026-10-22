@@ -4,30 +4,36 @@ Bu fayl shu repo ustida ishlaganda Claude Code (yoki boshqa AI agent) o'qiydigan
 
 ## Qisqacha
 
-LogDownloader — VictoriaLogs uchun web UI'li log query/export vositasi. Go backend (single static binary, React frontend `go:embed` orqali ichiga joylangan) + React 19 + Vite + TS frontend. Storage — disk ustida JSON fayllar.
+LogDownloader — VictoriaLogs uchun web UI'li log query/export vositasi. Go backend (single static binary, React frontend `go:embed` orqali ichiga joylangan) + React 19 + Vite + TS frontend. Storage — disk ustida JSON fayllar. UI ikki tilli (uz/ru).
 
 ## Repo tashkili
 
 ```
 backend/
-  cmd/main.go              # entry: config -> store -> RecoverJobs -> worker -> handler -> serve
+  cmd/main.go              # entry: config -> store -> RecoverJobs -> notifier -> worker -> scheduler -> handler -> serve
   internal/
-    auth/                  # JWT + bcrypt + middleware (user har so'rovda store'dan o'qiladi)
-    config/                # YAML/env config
-    handler/               # /api/* HTTP handlerlar
+    auth/                  # JWT (sessiya + download token), bcrypt, middleware, rate limiter
+    config/                # YAML/env config (host, port, data_dir, jwt_secret, export_chunk_mb)
+    handler/               # /api/* — handler.go (auth/users/profil), datasources, queries, logs (viewer proxy),
+                           #   jobs, shares, schedules, admin (audit, settings), system (healthz, metrics)
     model/                 # data tiplari
-    store/                 # mutex'li JSON fayl store (settings/users/queries/jobs/shares)
-    worker/                # background export goroutine + per-job cancel
-    vlclient/              # VictoriaLogs HTTP wrapper
+    store/                 # mutex'li JSON store: store.go (settings/users/queries), jobs.go, shares.go,
+                           #   schedules.go, history.go, audit.go (jsonl)
+    worker/                # export dvigateli: worker.go (navbat/dispatcher), windows.go (vaqt oynalari),
+                           #   export.go (retry/rollback), sink.go (tarkib transformatsiyasi + qismlar), package.go (tar.gz/volumelar)
+    scheduler/             # cron parser + rejali exportlar
+    notify/                # Telegram / SMTP / webhook
+    metrics/               # Prometheus text metrikalar + HTTP hisoblagich
+    vlclient/              # VictoriaLogs HTTP wrapper (tenant header'lar, hits/field_names/streams/tail)
   web/embed.go             # //go:embed dist/*
   web/dist/                # frontend build (gitignored, build paytida copy qilinadi)
 frontend/
-  src/i18n.tsx             # uz/ru lug'at + LangProvider + useT()
+  src/i18n.tsx             # uz/ru lug'at + LangProvider + useT() + formatBytes/formatDuration
   src/api.ts               # bitta `api` object — barcha fetch
   src/App.tsx              # route + auth gating
-  src/components/Layout.tsx
-  src/pages/*.tsx          # Login, LogViewer, Jobs, Settings, Users
-scripts/smoke/             # end-to-end smoke test (mock VictoriaLogs + python)
+  src/components/          # Layout, Histogram (SVG), FieldsPanel
+  src/pages/*.tsx          # Login, LogViewer, Jobs, Schedules, Settings, Profile, Audit, Users
+scripts/smoke/             # end-to-end smoke test (vaqtga sezgir mock VictoriaLogs + python, 87 tekshiruv)
 .memory/                   # qo'shimcha texnik reference
 config.yaml                # default config (paketga kiradi)
 Dockerfile, docker-compose.yml
@@ -44,13 +50,14 @@ make build
 # Faqat backend (frontend dist allaqachon bor bo'lsa)
 cd backend && go run ./cmd
 
-# Frontend dev (faqat UI, API'siz)
-cd frontend && npm run dev
+# Frontend type-check / dev
+cd frontend && npx tsc --noEmit -p tsconfig.app.json
+cd frontend && npm run dev          # API'ni proxy qilmaydi
 
-# Smoke test (binary + mock VictoriaLogs, ~15s)
+# Smoke test (binary + mock VictoriaLogs, ~2 daqiqa, 87 tekshiruv)
 make build && python3 -I scripts/smoke/smoke.py
 # race detector bilan:
-cd backend && go build -race -o ../build/ld-race ./cmd && LOGDOWNLOADER_BIN=../build/ld-race python3 -I ../scripts/smoke/smoke.py
+cd backend && go build -race -o ../build/ld-race ./cmd && cd .. && LOGDOWNLOADER_BIN=build/ld-race SMOKE_PORT=13100 SMOKE_VL_PORT=19528 python3 -I scripts/smoke/smoke.py
 
 # Docker compose (VictoriaLogs + log-generator + app)
 docker compose up --build
@@ -60,41 +67,54 @@ make package-rpm
 make package-deb
 ```
 
-> `make frontend` yoki `npm run build`'dan keyin `backend/web/dist` to'ldirilgan bo'lishi shart, aks holda `cmd/main.go` ichidagi `fs.Sub(web.StaticFiles, "dist")` panic qiladi (`embed` direktivasi bo'sh papkani qabul qilmaydi).
+> `make frontend` yoki `npm run build`'dan keyin `backend/web/dist` to'ldirilgan bo'lishi shart, aks holda `cmd/main.go` ichidagi `fs.Sub(web.StaticFiles, "dist")` panic qiladi.
+
+> Smoke test WSL'da `http_proxy` o'rnatilgan bo'lsa ham ishlaydi (skript loopback uchun proxy'siz opener qo'yadi). `pkill -f`/`pgrep -f` bilan jarayon o'ldirmang — pattern o'z shell buyrug'ingizga ham mos kelib shell'ni o'ldiradi; `pkill -x logdownloader` yoki PID ishlating.
 
 ## Mustlar / muhim nuktalar
 
-- **UI ikki tilli — uz (lotin, default) va ru.** Barcha ko'rinadigan matn `frontend/src/i18n.tsx` lug'atidan `t("key")` orqali olinadi. Yangi matn qo'shganda **ikkala** lug'atga kiriting (TypeScript `ru` ni `Record<TKey, string>` sifatida majburlaydi). Til `localStorage("lang")` da; sidebar va login sahifasida UZ/RU tugmasi.
-- **Arxiv formati tanlanadi, default `.tar.gz`** (`.tar.gz` / `.log.gz` / `.log`). Backend bo'sh/noma'lum formatni `tar.gz` deb oladi (`worker.normalizeFormat`).
-- **Bo'laklash qulflangan: faqat "Avtomatik".** Log Viewer'da bo'laklash tanlovi yo'q, "Bo'laklash: Avtomatik" chip'i bor. Server `.tar.gz` ichida xom hajm `export_chunk_mb` (default 100 MB, env `EXPORT_CHUNK_MB`, 0 = o'chiq) dan oshsa qator chegarasida `<nom>_partNNN.log` qismlarga bo'ladi, kichik export bitta `<nom>.log`. `log`/`log.gz` formatlari bitta fayl (bo'laklash faqat arxivda). Chegaralar `worker.partTracker` da streaming paytida aniqlanadi (qayta o'qish yo'q). UI'ga bo'laklash tanlovini qo'shmang.
-- **Export sahifasi yo'q.** Barcha export funksiyasi Log Viewer'da (fayl nomi + format + Export tugmasi). `/export` route Log Viewer'ga redirect qiladi.
-- **Go 1.22+ mux pattern** ishlatiladi (`mux.HandleFunc("POST /api/...", ...)` va `r.PathValue("id")`). Eski `gorilla/mux` qo'shmang.
-- **Auth middleware** `/api/login` va `/api/`'dan tashqari hamma route'ni bypass qiladi — ya'ni static fayllar va `/dl/{token}` middleware'siz beriladi. Yangi public endpoint qo'shsangiz, [auth.go](backend/internal/auth/auth.go) dagi `Middleware` boshini yangilang. Middleware token'dagi `user_id` bo'yicha userni **store'dan** o'qiydi: o'chirilgan user tokeni 401, rol o'zgarishi keyingi so'rovdan kuchga kiradi.
-- **Store nusxa qaytaradi.** `GetSettings`/`GetDatasource`/`GetJob`/`GetJobsForUser` chuqur nusxa beradi — handler ularni mutex'siz o'zgartirib `Save*` ga qaytarishi mumkin. Store'ning ichki slice/map'iga pointer qaytaruvchi metod qo'shmang (bu avval real data race edi).
-- **Store o'zgarishlar atomar emas** — `saveFile` xatosi qaytsa, in-memory state allaqachon yangilangan bo'ladi. Yangi entity qo'shganda shu pattern'ni saqlash mumkin (overkill emas).
-- **Joblar `jobs.json` da saqlanadi.** Progress (har 1000 qator) faqat xotirada; diskka faqat qo'shish/o'chirish/yakuniy holat yoziladi. Startup'da `store.RecoverJobs()`: running qolgan joblar failed, chala/`.tmp`/orphan fayllar o'chadi, egasiz share'lar o'chadi.
-- **Job ownership.** `ExportJob.OwnerID/OwnerName`. Oddiy user faqat o'z joblarini ko'radi/yuklaydi/o'chiradi/share qiladi; admin hammasini. Tekshiruv `handler.loadJobForUser` orqali.
-- **Running job o'chirilsa worker to'xtaydi** — `worker.Cancel(id)` context'ni bekor qiladi, chala fayl olib tashlanadi. Worker concurrency limiti yo'q (har export alohida goroutine); cap kerak bo'lsa worker pool, lekin oldindan kelishmasdan abstractsiya qilmang.
-- **Export worker'da timeout yo'q (intentional).** `vlclient.DoLongRunning(ctx, ...)` dedicated client ishlatadi: `Timeout=0`, `ResponseHeaderTimeout=0`, `IdleConnTimeout=0`. Faqat initial dial (30s) va TLS handshake (30s)'da limit bor. Bu yerga timeout qo'shmang — export bir necha soat ishlashi normal. Uzish faqat context orqali.
-- **Datasource paroli API javobida qaytmaydi** — `password` o'rniga `has_password`. PUT'da bo'sh parol = "o'zgartirilmasin" (username bo'sh bo'lmasa); username tozalansa parol ham o'chadi. Diskda (`settings.json`) parol plain — encryption kelishilgan ish emas.
-- **`/dl/{token}` Range qo'llamaydi** (`Accept-Ranges: none`): bitta HTTP so'rov = bitta yuklab olish; aks holda download-manager chunk'lari limitni bir zumda tugatardi.
-- **JWT secret** birinchi ishga tushganda `<DataDir>/jwt_secret`'da auto-generate qilinadi (random 32 bayt, hex) yoki `JWT_SECRET` env / `jwt_secret:` YAML qiymatidan olinadi. `main.go`'da `auth.SetSecret(...)` doim chaqiriladi.
-- **Default admin/admin** birinchi ishga tushganda yaratiladi ([main.go](backend/cmd/main.go)). Bu chetlab o'tilmaydi, faqat keyin Users sahifasidan yangi admin yaratib eskisini o'chirib bo'ladi.
-- **systemd service'da `PORT`/`DATA_DIR` env BERILMAYDI** — env YAML'dan ustun, aks holda `/etc/logdownloader/config.yaml` e'tiborga olinmaydi. Service faylga env qo'shmang.
-- **Docker image'da `ca-certificates` bor** (HTTPS datasource uchun). Base image almashtirsangiz saqlab qoling.
-- **Frontend dev server** `npm run dev` — Vite default port 5173, lekin API'ni proxy qilmaydi (vite.config.ts'da proxy yo'q). To'liq UI test uchun `make frontend` qilib backend orqali serve qiling.
-- **Saved query API'sida `datasource_id` ixtiyoriy** — frontend uni doim yuboradi, lekin handler `Global` flagdan tashqari faqat name + query'ni majburiy qiladi.
+### UI
+- **Ikki tilli — uz (lotin, default) va ru.** Barcha matn `frontend/src/i18n.tsx` lug'atidan `t("key")`. Yangi matn **ikkala** lug'atga (TypeScript `ru` ni `Record<TKey, string>` sifatida majburlaydi). Kutubxona qo'shmang.
+- **Export sahifasi yo'q** — hammasi Log Viewer'da. `/export` → `/`.
+- **Arxiv formati tanlanadi, default `.tar.gz`**; **bo'laklash qulflangan "Avtomatik"** (chip, tanlov yo'q). Tarkib: `ndjson` | `msg` | `csv` (+ maydonlar), arxiv hajmi chegarasi (tar.gz), tugaganda xabar / auto-share — "Export sozlamalari" `<details>` ichida.
+- Log Viewer chap paneli: Saqlangan / Maydonlar (field_names → field_values → query'ga qo'shish, streamlar) / Tarix. Gistogramma (`/api/hits`, ustun bosilsa zoom), Live tail (`/api/tail`, NDJSON oqim, AbortController), autocomplete (maydon nomlari, Tab), ustunlar sozlamasi (localStorage, datasource bo'yicha), URL'da `q/ds/from/to/sort`.
+- Jobs: Navbatda / Running (progress bar, ETA, oynalar, retry) / Done (ko'p faylli bo'lsa har fayl tugmasi) / Failed; stats panel (disk, kvota, navbat). Download `POST /download-token` → `?dt=` (sessiya JWT URL'ga tushmaydi).
+
+### Backend
+- **Go 1.22+ mux pattern** (`mux.HandleFunc("POST /api/...")`, `r.PathValue`). `gorilla/mux` qo'shmang.
+- **Auth middleware** `/api/login` va `/api/`'dan tashqari hamma yo'lni bypass qiladi (static, `/dl/`, `/healthz`, `/metrics`). Userni har so'rovda store'dan o'qiydi. Yangi public endpoint — [auth.go](backend/internal/auth/auth.go) `Middleware`. `/download` yo'llarida `?dt=` (typ=download, job'ga bog'langan, 5 min) qabul qilinadi; eski `?token=<jwt>` **yo'q**.
+- **Login himoyasi**: IP bo'yicha 30/min, user+IP bo'yicha 5 xato / 15 min → 429 (`auth.Limiter`, xotirada).
+- **Store nusxa qaytaradi** (`GetSettings`/`GetDatasource`/`GetJob`/`GetJobsForUser`/`GetSchedule`); ichki pointer qaytaruvchi metod qo'shmang. `UpdateJob(id, persist, fn)` — mutex ostida mutatsiya; progress uchun `persist=false`.
+- **Joblar `jobs.json` da.** Holatlar: `queued → running → done|failed`. Startup `RecoverJobs`: running → failed, queued qayta navbatga, orphan fayllar o'chadi. Worker navbati `settings.worker.max_concurrent` (admin UI), dispatcher `Signal()` bilan uyg'otiladi.
+- **Export dvigateli (worker/)** — o'zgartirishdan oldin oqimni tushuning:
+  1. `planWindows`: oraliq ≤2h → bitta so'rov; ≤48h → 1h oynalar; ≤14d → 6h; aks holda 24h (max 2000 oyna). Ochiq boshlanish → `EarliestTime` probe (pipe'li query'da bo'lmaydi). Oyna `end` = keyingi `start` − 1ns.
+  2. `CountHits` (pipe'siz query) → `total_estimate`.
+  3. Har oyna: `sink.mark()` (bufer **flush** qilinadi — rollback faqat shu oynani tashlasin) → `fetchWindow` → xato: 5xx/tarmoq = retryable (3 marta, backoff 2/5/15s, `sink.rollback` truncate), 4xx = failed.
+  4. `rawSink`: tarkib transformatsiyasi (`transform`) + `partTracker` (qism chegaralari qator chegarasida, `export_chunk_mb`), `.tmp` faylga.
+  5. `packageOutput`: tar.gz → qismlar entry (`<nom>_partNNN.<ext>`), `archive_split_mb` → volumelar (`<nom>_volNNN.tar.gz`, siqilgan hajm bo'yicha, qism granulyarligida); log.gz → gzip; log → rename (CSV sarlavha bo'lsa nusxa). CSV sarlavhasi har qism/fayl boshida.
+  6. done → `Files`, `Size`, `Parts` → auto-share (7 kun) → `notifier.JobFinished` (goroutine).
+  Timeout qo'shmang (soatlab oqim normal); bekor qilish faqat context (`Cancel`).
+- **Scheduler**: 5 maydonli cron (o'z parser, `@hourly`… presetlar), 30s tick, `Range(now, lookback, align)`, o'tkazib yuborilgan run bitta marta qoplanadi, `RunNow`. `robfig/cron` qo'shmang.
+- **Retention** (settings, admin): `PruneExports(days, quota)` har 10 daqiqada va startup'da; running/queued tegilmaydi.
+- **Audit** `audit.jsonl` (append, 20 MB da rotatsiya, 3 ta eski fayl). Yangi muhim amal qo'shsangiz `h.audit(r, "obj.action", target, details)` chaqiring.
+- **Metrics** `/metrics` (kutubxonasiz text format). Yangi hisoblagich — `metrics` paketidagi atomic'lar.
+- **Bildirishnoma**: kanallar admin `Settings.Notify` (token/parol API'da qaytmaydi, faqat `has_*`), manzillar user profilida. Webhook har job uchun (sozlangan bo'lsa).
+- **Datasource**: parol API'da qaytmaydi (`has_password`), PUT bo'sh parol = saqlanadi; `AccountID`/`ProjectID` ixtiyoriy tenant header'lar (Go `Accountid` deb kanonlashtiradi — normal).
+- **`/dl/{token}` va `/dl/{token}/{n}`** Range qo'llamaydi (`Accept-Ranges: none`).
+- **JWT secret** `<DataDir>/jwt_secret` auto-generate yoki `JWT_SECRET`/`jwt_secret:`.
+- **systemd service'da `PORT`/`DATA_DIR` env BERILMAYDI** (env YAML'dan ustun). **Docker image'da `ca-certificates`** shart.
+- Versiya `-ldflags "-X main.version=..."` (Makefile `VERSION`, CI tag, Dockerfile `ARG VERSION`).
 
 ## Stil
 
 - Go: standard library'ga ustuvor; faqat 4 ta external dep (uuid, jwt, x/crypto, yaml). Yangi dep qo'shishdan oldin kelishish.
-- React: function components + hooks. Class component yo'q. State management library yo'q — `useState` + props + bitta `LangContext` yetarli. i18n kutubxonasi qo'shmang — `i18n.tsx` yetarli.
-- CSS: `Pages.css` + `Layout.css` + global `index.css`. CSS-in-JS yoki Tailwind yo'q.
-- Backend errorlar: `http.Error(w, msg, code)` + JSON-siz plain text. Mavjud pattern'ni saqlang.
+- React: function components + hooks, `useState` + props + `LangContext`. State library, i18n library, chart library yo'q (gistogramma — inline SVG).
+- CSS: `Pages.css` + `Layout.css` + global `index.css`, CSS o'zgaruvchilar (ikkala tema).
+- Backend errorlar: `http.Error(w, msg, code)` plain text.
 
 ## Test
 
-Unit test yo'q. `scripts/smoke/smoke.py` — binary + mock VictoriaLogs bilan end-to-end tekshiruv (auth, parol strip, export tar.gz, avtomatik bo'laklash `EXPORT_CHUNK_MB=1` bilan, ownership, share, cancel, JWT, restart recovery). Backend xatti-harakatini o'zgartirsangiz shu testni yangilab ishga tushiring; race detector build bilan ham o'tishi kerak. Yangi Go unit test qo'shganda `internal/.../*_test.go` joylash kerak.
+Unit test yo'q (hozircha kerak emas deb kelishilgan). `scripts/smoke/smoke.py` + `mock_vl.py` — end-to-end: auth/rate limit/profil, system endpointlar, datasource (parol, tenant, test), viewer proxy'lari (fields/values/streams/hits/tail/history), export (default tar.gz, estimate, ownership, persist), download token, tarkib formatlari, qismlar + volumelar, vaqt oynalari + retry/rollback, share, navbat + cancel, schedules, settings + notify test + audit, JWT, auto-share, restart recovery + retention. Backend xatti-harakatini o'zgartirsangiz shu testni yangilab ishga tushiring; race build bilan ham o'tishi kerak. Mock `limit/start/end` ni hurmat qiladi; qatorlar 2026-10-21 10:00–10:49Z da.
 
 ## Memory file references
 

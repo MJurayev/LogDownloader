@@ -6,6 +6,9 @@ import LogViewerPage from "./pages/LogViewerPage";
 import JobsPage from "./pages/JobsPage";
 import SettingsPage from "./pages/SettingsPage";
 import UsersPage from "./pages/UsersPage";
+import SchedulesPage from "./pages/SchedulesPage";
+import AuditPage from "./pages/AuditPage";
+import ProfilePage from "./pages/ProfilePage";
 
 function App() {
   const [authed, setAuthed] = useState(!!localStorage.getItem("token"));
@@ -27,13 +30,18 @@ function App() {
     );
   }
 
+  const isAdmin = user?.role === "admin";
+
   return (
     <Routes>
       <Route element={<Layout user={user} onLogout={handleLogout} />}>
         <Route path="/" element={<LogViewerPage />} />
         <Route path="/jobs" element={<JobsPage />} />
-        <Route path="/settings" element={<SettingsPage isAdmin={user?.role === "admin"} />} />
-        {user?.role === "admin" && <Route path="/users" element={<UsersPage />} />}
+        <Route path="/schedules" element={<SchedulesPage />} />
+        <Route path="/settings" element={<SettingsPage isAdmin={isAdmin} />} />
+        <Route path="/profile" element={<ProfilePage />} />
+        {isAdmin && <Route path="/users" element={<UsersPage />} />}
+        {isAdmin && <Route path="/audit" element={<AuditPage />} />}
       </Route>
       <Route path="/login" element={<Navigate to="/" />} />
       {/* Eski /export havolalari Log Viewer'ga yo'naltiriladi (sahifa olib tashlangan). */}
