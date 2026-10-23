@@ -2,12 +2,25 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"logdownloader/internal/auth"
 	"logdownloader/internal/model"
 
 	"github.com/google/uuid"
 )
+
+// normalizeFolder — bo'sh bo'laklar va chekka slash'larsiz "a/b/c".
+func normalizeFolder(f string) string {
+	parts := strings.Split(f, "/")
+	out := parts[:0]
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "/")
+}
 
 func (h *Handler) getQueries(w http.ResponseWriter, r *http.Request) {
 	u := auth.GetUser(r)
@@ -26,6 +39,7 @@ func (h *Handler) createQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	q.ID = uuid.NewString()
 	q.OwnerID = u.ID
+	q.Folder = normalizeFolder(q.Folder)
 	if q.Global && u.Role != model.RoleAdmin {
 		q.Global = false
 	}
@@ -64,6 +78,7 @@ func (h *Handler) updateQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	input.ID = existing.ID
 	input.OwnerID = existing.OwnerID
+	input.Folder = normalizeFolder(input.Folder)
 	if input.Global && u.Role != model.RoleAdmin {
 		input.Global = existing.Global
 	}

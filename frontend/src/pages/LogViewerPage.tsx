@@ -54,6 +54,57 @@ function addFilterToQuery(query: string, expr: string): string {
   return `${filter} AND ${expr}${rest}`;
 }
 
+// Saqlangan querylar daraxti: papka yo'li "a/b/c" → ichma-ich tugunlar.
+interface FolderNode {
+  name: string;
+  path: string;
+  children: FolderNode[];
+  queries: SavedQuery[];
+}
+function buildQueryTree(list: SavedQuery[]): FolderNode {
+  const root: FolderNode = { name: "", path: "", children: [], queries: [] };
+  for (const q of list) {
+    const parts = (q.folder || "").split("/").map((s) => s.trim()).filter(Boolean);
+    let node = root;
+    let path = "";
+    for (const part of parts) {
+      path = path ? `${path}/${part}` : part;
+      let child = node.children.find((c) => c.name === part);
+      if (!child) {
+        child = { name: part, path, children: [], queries: [] };
+        node.children.push(child);
+      }
+      node = child;
+    }
+    node.queries.push(q);
+  }
+  const sortNode = (n: FolderNode) => {
+    n.children.sort((a, b) => a.name.localeCompare(b.name));
+    n.queries.sort((a, b) => a.name.localeCompare(b.name));
+    n.children.forEach(sortNode);
+  };
+  sortNode(root);
+  return root;
+}
+const countQueries = (n: FolderNode): number => n.queries.length + n.children.reduce((s, c) => s + countQueries(c), 0);
+const allGlobal = (n: FolderNode): boolean => n.queries.every((q) => q.global) && n.children.every(allGlobal);
+const collectFolders = (n: FolderNode, out: string[] = []): string[] => {
+  n.children.forEach((c) => {
+    out.push(c.path);
+    collectFolders(c, out);
+  });
+  return out;
+};
+function loadStrSet(key: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch {
+    /* ignore */
+  }
+  return new Set();
+}
+
 // Ustun sozlamalari localStorage'da (datasource bo'yicha).
 interface ColPrefs {
   hidden: string[];
@@ -96,6 +147,10 @@ export default function LogViewerPage() {
   const [saveName, setSaveName] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
   const [saveGlobal, setSaveGlobal] = useState(false);
+  const [saveFolder, setSaveFolder] = useState("");
+  const currentUserId: string = JSON.parse(localStorage.getItem("user") || "{}").user_id || "";
+  const [showGlobal, setShowGlobal] = useState<boolean>(() => localStorage.getItem("lv_show_global") !== "0");
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadStrSet("lv_sq_collapsed"));
   const [savingQuery, setSavingQuery] = useState(false);
   const isAdmin = JSON.parse(localStorage.getItem("user") || "{}").role === "admin";
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
@@ -105,6 +160,7 @@ export default function LogViewerPage() {
   const [editQueryText, setEditQueryText] = useState("");
   const [editQueryDS, setEditQueryDS] = useState("");
   const [editQueryGlobal, setEditQueryGlobal] = useState(false);
+  const [editQueryFolder, setEditQueryFolder] = useState("");
   const [editQuerySaving, setEditQuerySaving] = useState(false);
   const [editQueryMsg, setEditQueryMsg] = useState("");
 
@@ -432,6 +488,7 @@ export default function LogViewerPage() {
     setEditQueryText(sq.query);
     setEditQueryDS(sq.datasource_id || "");
     setEditQueryGlobal(sq.global);
+    setEditQueryFolder(sq.folder || "");
     setEditQueryMsg("");
   };
 
@@ -444,7 +501,7 @@ export default function LogViewerPage() {
     if (!editingQuery || !editQueryName.trim() || !editQueryText.trim()) return;
     setEditQuerySaving(true);
     try {
-      await api.updateQuery(editingQuery.id, editQueryName, editQueryText, editQueryDS || undefined, editQueryGlobal);
+      await api.updateQuery(editingQuery.id, editQueryName, editQueryText, editQueryDS || undefined, editQueryGlobal, editQueryFolder);
       await loadSavedQueries();
       setEditQueryMsg(t("saved"));
       setTimeout(() => {
@@ -461,7 +518,7 @@ export default function LogViewerPage() {
     if (!saveName.trim() || !query.trim()) return;
     setSavingQuery(true);
     try {
-      await api.createQuery(saveName, query, selectedDS, saveGlobal);
+      await api.createQuery(saveName, query, selectedDS, saveGlobal, saveFolder);
       await loadSavedQueries();
       setSaveMsg(t("saved"));
       setTimeout(() => {
@@ -469,6 +526,7 @@ export default function LogViewerPage() {
         setSaveMsg("");
         setSaveName("");
         setSaveGlobal(false);
+        setSaveFolder("");
         setSavingQuery(false);
       }, 600);
     } catch {
@@ -507,6 +565,87 @@ export default function LogViewerPage() {
     }
   };
 
+  // Saqlangan querylar: global filtri, daraxt, papka yig'ish/yoyish holati.
+  const visibleQueries = showGlobal ? savedQueries : savedQueries.filter((q) => q.owner_id === currentUserId || !q.global);
+  const queryTree = useMemo(() => buildQueryTree(visibleQueries), [visibleQueries]);
+  const folderNames = useMemo(() => collectFolders(buildQueryTree(savedQueries)), [savedQueries]);
+  const toggleShowGlobal = (v: boolean) => {
+    setShowGlobal(v);
+    try {
+      localStorage.setItem("lv_show_global", v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
+  const persistCollapsed = (s: Set<string>) => {
+    setCollapsed(new Set(s));
+    try {
+      localStorage.setItem("lv_sq_collapsed", JSON.stringify([...s]));
+    } catch {
+      /* ignore */
+    }
+  };
+  const toggleFolder = (path: string) => {
+    const s = new Set(collapsed);
+    if (s.has(path)) s.delete(path);
+    else s.add(path);
+    persistCollapsed(s);
+  };
+  const setAllFolders = (collapse: boolean) => persistCollapsed(new Set(collapse ? folderNames : []));
+
+  const renderQueryItem = (sq: SavedQuery, depth: number) => (
+    <div
+      key={sq.id}
+      className={`sq-item ${activeQueryId === sq.id ? "active" : ""} ${depth > 0 ? "nested" : ""}`}
+      style={{ marginLeft: depth * 12 }}
+      onClick={() => handleSelectQuery(sq)}
+    >
+      <div className="sq-item-name">
+        {sq.name}
+        {sq.global && <span className="global-badge">G</span>}
+      </div>
+      <div className="sq-item-query">{sq.query}</div>
+      <div className="sq-item-actions">
+        <button className="sq-item-edit" onClick={(e) => { e.stopPropagation(); openEditQuery(sq); }} title={t("edit")}>✎</button>
+        <button className="sq-item-delete" onClick={(e) => { e.stopPropagation(); handleDeleteQuery(sq.id); }} title={t("delete")}>&times;</button>
+      </div>
+    </div>
+  );
+
+  const renderFolder = (node: FolderNode, depth: number): React.ReactNode => {
+    const isCollapsed = collapsed.has(node.path);
+    return (
+      <div key={node.path} className="sq-folder">
+        <button type="button" className="sq-folder-row" style={{ paddingLeft: 10 + depth * 12 }} onClick={() => toggleFolder(node.path)}>
+          <span className="field-chevron">{isCollapsed ? "▸" : "▾"}</span>
+          <span className="sq-folder-icon">{isCollapsed ? "📁" : "📂"}</span>
+          <span className="sq-folder-name">{node.name}</span>
+          {allGlobal(node) && <span className="global-badge">G</span>}
+          <span className="field-hits">{countQueries(node)}</span>
+        </button>
+        {!isCollapsed && (
+          <>
+            {node.children.map((c) => renderFolder(c, depth + 1))}
+            {node.queries.map((q) => renderQueryItem(q, depth + 1))}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const folderInput = (value: string, onChange: (v: string) => void) => (
+    <div className="form-group">
+      <label className="label">{t("folderLabel")}</label>
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={t("folderPlaceholder")} className="input" list="lv-folder-names" />
+      <datalist id="lv-folder-names">
+        {folderNames.map((f) => (
+          <option key={f} value={f} />
+        ))}
+      </datalist>
+      <div className="hint">{t("folderHint")}</div>
+    </div>
+  );
+
   const dsSelect = (value: string, onChange: (v: string) => void, allowEmpty = false) => (
     <select value={value} onChange={(e) => onChange(e.target.value)} className="input ds-select">
       {allowEmpty && <option value="">{t("dsNotSelected")}</option>}
@@ -530,30 +669,30 @@ export default function LogViewerPage() {
           ))}
         </div>
 
-        {sidePanel === "saved" &&
-          (savedQueries.length === 0 ? (
-            <div className="sq-empty">{t("noQueries")}</div>
-          ) : (
-            <div className="sq-list">
-              {savedQueries.map((sq) => (
-                <div key={sq.id} className={`sq-item ${activeQueryId === sq.id ? "active" : ""}`} onClick={() => handleSelectQuery(sq)}>
-                  <div className="sq-item-name">
-                    {sq.name}
-                    {sq.global && <span className="global-badge">G</span>}
-                  </div>
-                  <div className="sq-item-query">{sq.query}</div>
-                  <div className="sq-item-actions">
-                    <button className="sq-item-edit" onClick={(e) => { e.stopPropagation(); openEditQuery(sq); }} title={t("edit")}>
-                      ✎
-                    </button>
-                    <button className="sq-item-delete" onClick={(e) => { e.stopPropagation(); handleDeleteQuery(sq.id); }} title={t("delete")}>
-                      &times;
-                    </button>
-                  </div>
-                </div>
-              ))}
+        {sidePanel === "saved" && (
+          <>
+            <div className="sq-toolbar">
+              <label className="check">
+                <input type="checkbox" checked={showGlobal} onChange={(e) => toggleShowGlobal(e.target.checked)} />
+                {t("showGlobalQueries")}
+              </label>
+              {folderNames.length > 0 && (
+                <span>
+                  <button type="button" className="sq-toolbar-btn" onClick={() => setAllFolders(false)} title={t("expandAll")}>▾▾</button>
+                  <button type="button" className="sq-toolbar-btn" onClick={() => setAllFolders(true)} title={t("collapseAll")}>▸▸</button>
+                </span>
+              )}
             </div>
-          ))}
+            {visibleQueries.length === 0 ? (
+              <div className="sq-empty">{t("noQueries")}</div>
+            ) : (
+              <div className="sq-list">
+                {queryTree.children.map((c) => renderFolder(c, 0))}
+                {queryTree.queries.map((q) => renderQueryItem(q, 0))}
+              </div>
+            )}
+          </>
+        )}
 
         {sidePanel === "fields" && (
           <FieldsPanel datasourceId={selectedDS} query={query} start={toISO(timeStart)} end={toISO(timeEnd)} refreshKey={fieldsRefresh} onAddFilter={addFilter} />
@@ -598,6 +737,12 @@ export default function LogViewerPage() {
         <p className="subtitle">{t("lvSubtitle")}</p>
 
         <div className="viewer-controls">
+          <div className="toolbar-row">
+            <div className="ds-selector">
+              <label className="filter-label">{t("datasource")}</label>
+              {datasources.length > 0 ? dsSelect(selectedDS, setSelectedDS) : <span className="ds-empty-hint">{t("noDatasourceHint")}</span>}
+            </div>
+          </div>
           <div className="time-range-row">
             <div className="time-range-inputs">
               <div className="time-range-field">
@@ -650,10 +795,6 @@ export default function LogViewerPage() {
             </div>
           </div>
           <div className="time-tz-hint">{t("tzHint", { tz: browserTZ })}</div>
-          <div className="ds-selector">
-            <label className="filter-label">{t("datasource")}</label>
-            {datasources.length > 0 ? dsSelect(selectedDS, setSelectedDS) : <span className="ds-empty-hint">{t("noDatasourceHint")}</span>}
-          </div>
           <div className="viewer-query-row">
             <div className="query-wrap">
               <textarea
@@ -695,7 +836,8 @@ export default function LogViewerPage() {
             </button>
           </div>
 
-          <div className="viewer-secondary-actions">
+          <div className="export-bar">
+          <div className="export-bar-main">
             <button onClick={() => { setSaveName(""); setSaveMsg(""); setShowSaveModal(true); }} disabled={!query.trim()} className="btn btn-small btn-outline">
               {t("saveQuery")}
             </button>
@@ -715,8 +857,8 @@ export default function LogViewerPage() {
 
           <details className="export-options">
             <summary>{t("exportOptions")}</summary>
-            <div className="export-options-grid">
-              <div className="form-group">
+            <div className="form-grid cols-3">
+              <div className="field">
                 <label className="label">{t("contentLabel")}</label>
                 <select value={exportContent} onChange={(e) => setExportContent(e.target.value as ExportContent)} className="input ds-select">
                   <option value="ndjson">{t("contentNdjson")}</option>
@@ -724,7 +866,7 @@ export default function LogViewerPage() {
                   <option value="csv">{t("contentCsv")}</option>
                 </select>
               </div>
-              <div className="form-group">
+              <div className="field">
                 <label className="label">{t("fieldsLabel")}</label>
                 <input value={exportFields} onChange={(e) => setExportFields(e.target.value)} placeholder={t("fieldsPlaceholder")} className="input" disabled={exportContent === "msg"} list="lv-field-names" />
                 <datalist id="lv-field-names">
@@ -732,9 +874,9 @@ export default function LogViewerPage() {
                     <option key={f} value={f} />
                   ))}
                 </datalist>
-                <div className="field-hint">{t("fieldsHint")}</div>
+                <div className="hint">{t("fieldsHint")}</div>
               </div>
-              <div className="form-group">
+              <div className="field">
                 <label className="label">{t("archiveSplitLabel")}</label>
                 <select value={archiveSplit} onChange={(e) => setArchiveSplit(Number(e.target.value))} className="input ds-select" disabled={exportFormat !== "tar.gz"}>
                   {ARCHIVE_SPLIT_OPTIONS.map((mb) => (
@@ -744,20 +886,21 @@ export default function LogViewerPage() {
                   ))}
                 </select>
               </div>
-              <div className="form-group export-checks">
-                <label className="global-check" title={canNotify ? "" : t("notifyNoTarget")}>
+              <div className="field check-group span-2">
+                <label className="check" title={canNotify ? "" : t("notifyNoTarget")}>
                   <input type="checkbox" checked={notifyOnDone && canNotify} disabled={!canNotify} onChange={(e) => setNotifyOnDone(e.target.checked)} />
                   {t("notifyLabel")}
-                  {!canNotify && <span className="field-hint"> ({t("notifyNoTarget")})</span>}
+                  {!canNotify && <span className="hint"> ({t("notifyNoTarget")})</span>}
                 </label>
-                <label className="global-check">
+                <label className="check">
                   <input type="checkbox" checked={autoShare} onChange={(e) => setAutoShare(e.target.checked)} />
                   {t("autoShareLabel")}
                 </label>
               </div>
             </div>
-            {exportMsg && <div className="error-text">{exportMsg}</div>}
+            {exportMsg && <div className="hint err">{exportMsg}</div>}
           </details>
+          </div>
 
           {editingQuery && (
             <div className="save-modal-overlay" onClick={closeEditQuery}>
@@ -777,6 +920,7 @@ export default function LogViewerPage() {
                     {dsSelect(editQueryDS, setEditQueryDS, true)}
                   </div>
                 )}
+                {folderInput(editQueryFolder, setEditQueryFolder)}
                 {isAdmin && (
                   <label className="global-check">
                     <input type="checkbox" checked={editQueryGlobal} onChange={(e) => setEditQueryGlobal(e.target.checked)} />
@@ -800,6 +944,7 @@ export default function LogViewerPage() {
                 <h3>{t("saveQueryTitle")}</h3>
                 <code className="save-modal-query">{query}</code>
                 <input value={saveName} onChange={(e) => setSaveName(e.target.value)} placeholder={t("queryNamePlaceholder")} className="input" autoFocus onKeyDown={(e) => { if (e.key === "Enter") handleSaveQuery(); }} />
+                {folderInput(saveFolder, setSaveFolder)}
                 {isAdmin && (
                   <label className="global-check">
                     <input type="checkbox" checked={saveGlobal} onChange={(e) => setSaveGlobal(e.target.checked)} />

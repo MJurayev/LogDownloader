@@ -78,7 +78,7 @@ make package-deb
 - **Ikki tilli — uz (lotin, default) va ru.** Barcha matn `frontend/src/i18n.tsx` lug'atidan `t("key")`. Yangi matn **ikkala** lug'atga (TypeScript `ru` ni `Record<TKey, string>` sifatida majburlaydi). Kutubxona qo'shmang.
 - **Export sahifasi yo'q** — hammasi Log Viewer'da. `/export` → `/`.
 - **Arxiv formati tanlanadi, default `.tar.gz`**; **bo'laklash qulflangan "Avtomatik"** (chip, tanlov yo'q). Tarkib: `ndjson` | `msg` | `csv` (+ maydonlar), arxiv hajmi chegarasi (tar.gz), tugaganda xabar / auto-share — "Export sozlamalari" `<details>` ichida.
-- Log Viewer chap paneli: Saqlangan / Maydonlar (field_names → field_values → query'ga qo'shish, streamlar) / Tarix. Gistogramma (`/api/hits`, ustun bosilsa zoom), Live tail (`/api/tail`, NDJSON oqim, AbortController), autocomplete (maydon nomlari, Tab), ustunlar sozlamasi (localStorage, datasource bo'yicha), URL'da `q/ds/from/to/sort`.
+- Log Viewer chap paneli: Saqlangan (**papkalar daraxti** — `SavedQuery.Folder` "a/b/c", papka alohida obyekt emas; **"Global querylarni ko'rsatish"** toggle'i, yig'ish holati localStorage) / Maydonlar (field_names → field_values → query'ga qo'shish, streamlar) / Tarix. Gistogramma (`/api/hits`, ustun bosilsa zoom), Live tail (`/api/tail`, NDJSON oqim, AbortController), autocomplete (maydon nomlari, Tab), ustunlar sozlamasi (localStorage, datasource bo'yicha), URL'da `q/ds/from/to/sort`.
 - Jobs: Navbatda / Running (progress bar, ETA, oynalar, retry) / Done (ko'p faylli bo'lsa har fayl tugmasi) / Failed; stats panel (disk, kvota, navbat). Download `POST /download-token` → `?dt=` (sessiya JWT URL'ga tushmaydi).
 
 ### Backend
@@ -111,7 +111,7 @@ make package-deb
 
 - Go: standard library'ga ustuvor; external dep'lar: uuid, jwt, x/crypto, yaml, go-ldap (+asn1-ber). Yangi dep qo'shishdan oldin kelishish.
 - React: function components + hooks, `useState` + props + `LangContext`. State library, i18n library, chart library yo'q (gistogramma — inline SVG).
-- CSS: `Pages.css` + `Layout.css` + global `index.css`, CSS o'zgaruvchilar (ikkala tema).
+- CSS: `Pages.css` + `Layout.css` + global `index.css`, CSS o'zgaruvchilar (ikkala tema). **Forma tizimi** (v0.7.1): `.tabs/.tab`, `.panel/.panel-head/.panel-title/.panel-desc/.panel-sub/.panel-actions`, `.form-grid[.cols-3]` + `.field` (+`.span-2`) + `.hint` + `.field-row` + `.check/.check-group`. Yangi forma/sozlama shu klasslar bilan; eski `.form-group`/`.global-check` faqat modallarda qoldi.
 - Backend errorlar: `http.Error(w, msg, code)` plain text.
 
 ## Test

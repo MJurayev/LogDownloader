@@ -57,6 +57,7 @@ export interface SavedQuery {
   name: string;
   query: string;
   datasource_id?: string;
+  folder?: string; // "VASP/billing" — ichma-ich papka yo'li
   global: boolean;
   owner_id: string;
 }
@@ -330,16 +331,16 @@ export const api = {
   getQueries: (): Promise<SavedQuery[]> =>
     authFetch(`${API}/queries`).then((r) => r.json()),
 
-  createQuery: (name: string, query: string, datasourceId?: string, global?: boolean): Promise<SavedQuery> =>
+  createQuery: (name: string, query: string, datasourceId?: string, global?: boolean, folder?: string): Promise<SavedQuery> =>
     authFetch(`${API}/queries`, {
       method: "POST",
-      body: JSON.stringify({ name, query, datasource_id: datasourceId, global: global || false }),
+      body: JSON.stringify({ name, query, datasource_id: datasourceId, global: global || false, folder: folder || "" }),
     }).then((r) => okJson<SavedQuery>(r)),
 
-  updateQuery: (id: string, name: string, query: string, datasourceId?: string, global?: boolean): Promise<SavedQuery> =>
+  updateQuery: (id: string, name: string, query: string, datasourceId?: string, global?: boolean, folder?: string): Promise<SavedQuery> =>
     authFetch(`${API}/queries/${id}`, {
       method: "PUT",
-      body: JSON.stringify({ name, query, datasource_id: datasourceId, global: global || false }),
+      body: JSON.stringify({ name, query, datasource_id: datasourceId, global: global || false, folder: folder || "" }),
     }).then((r) => okJson<SavedQuery>(r)),
 
   deleteQuery: (id: string): Promise<void> =>

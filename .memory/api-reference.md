@@ -41,6 +41,7 @@ Body — Datasource (saqlanmagan bo'lishi mumkin). `id` berilsa va parol bo'sh b
 ```
 
 ## Saved Queries — `GET/POST /api/queries`, `PUT/DELETE /api/queries/{id}` (owner/admin; `global` faqat admin). Audit `query.create` / `query.delete`.
+Body: `{ name, query, datasource_id?, folder?, global }`. `folder` — "VASP/billing" ko'rinishida ichma-ich yo'l; server bo'sh bo'laklar va chekka `/` larni tozalaydi (`normalizeFolder`). Papka alohida obyekt emas — ko'rinishi querylarning `global`/`owner_id` iga ergashadi.
 
 ## Log viewer (VictoriaLogs proxy'lari)
 

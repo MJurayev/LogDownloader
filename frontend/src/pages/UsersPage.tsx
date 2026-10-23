@@ -81,18 +81,19 @@ export default function UsersPage() {
       <h1>{t("usersTitle")}</h1>
       <p className="subtitle">{t("usersSubtitle")}</p>
 
-      <div className="form-group">
-        <div className="settings-auth-row">
+      <div className="panel users-create">
+        <div className="panel-head"><h3 className="panel-title">{t("addUser")}</h3></div>
+        <div className="field-row" style={{ marginTop: 10 }}>
           <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder={t("username")} className="input" />
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t("password")} className="input" />
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t("password")} className="input" autoComplete="new-password" />
           <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t("emailLabel")} className="input" />
-          <select value={role} onChange={(e) => setRole(e.target.value)} className="input ds-select">
+          <select value={role} onChange={(e) => setRole(e.target.value)} className="input ds-select" style={{ flex: "0 0 160px" }}>
             <option value="user">{t("roleUser")}</option>
             <option value="admin">{t("roleAdmin")}</option>
           </select>
+          <button onClick={handleCreate} disabled={!username.trim() || !password.trim()} className="btn btn-small btn-primary">{t("addUser")}</button>
         </div>
-        <button onClick={handleCreate} disabled={!username.trim() || !password.trim()} className="btn btn-primary">{t("addUser")}</button>
-        {error && <div className="error-text">{error}</div>}
+        {error && <div className="hint err" style={{ marginTop: 8 }}>{error}</div>}
       </div>
 
       <div className="list">
@@ -119,22 +120,22 @@ export default function UsersPage() {
         <div className="save-modal-overlay" onClick={closeEdit}>
           <div className="save-modal" onClick={(e) => e.stopPropagation()}>
             <h3>{t("editUserTitle")}</h3>
-            <div className="form-group">
+            <div className="field">
               <label className="label">{t("username")}</label>
               <input value={editingUser.username} className="input" disabled />
             </div>
-            <div className="form-group">
+            <div className="field">
               <label className="label">{t("role")}</label>
               <select value={editRole} onChange={(e) => setEditRole(e.target.value)} className="input ds-select">
                 <option value="user">{t("roleUser")}</option>
                 <option value="admin">{t("roleAdmin")}</option>
               </select>
             </div>
-            <div className="form-group">
+            <div className="field">
               <label className="label">{t("emailLabel")}</label>
               <input value={editEmail} onChange={(e) => setEditEmail(e.target.value)} className="input" />
             </div>
-            <div className="form-group">
+            <div className="field">
               <label className="label">{t("newPasswordLabel")}</label>
               <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder={t("newPasswordPlaceholder")} className="input" />
             </div>

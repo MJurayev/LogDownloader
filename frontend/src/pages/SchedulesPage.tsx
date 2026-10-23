@@ -186,7 +186,7 @@ export default function SchedulesPage() {
               )}
             </div>
             {s.last_error && <div className="error-text">{t("lastError")}: {s.last_error}</div>}
-            {runMsg[s.id] && <div className="field-hint">{runMsg[s.id]}</div>}
+            {runMsg[s.id] && <div className="hint">{runMsg[s.id]}</div>}
           </div>
         ))}
       </div>
@@ -197,11 +197,11 @@ export default function SchedulesPage() {
         <div className="save-modal-overlay" onClick={() => setEditing(null)}>
           <div className="save-modal sched-modal" onClick={(e) => e.stopPropagation()}>
             <h3>{editingId ? t("editSchedule") : t("addSchedule")}</h3>
-            <div className="form-group">
+            <div className="field">
               <label className="label">{t("scheduleName")}</label>
               <input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} className="input" autoFocus />
             </div>
-            <div className="form-group">
+            <div className="field">
               <label className="label">{t("datasource")}</label>
               <select value={editing.datasource_id} onChange={(e) => setEditing({ ...editing, datasource_id: e.target.value })} className="input ds-select">
                 {datasources.map((d) => (
@@ -209,12 +209,12 @@ export default function SchedulesPage() {
                 ))}
               </select>
             </div>
-            <div className="form-group">
+            <div className="field">
               <label className="label">{t("query")}</label>
               <textarea value={editing.query} onChange={(e) => setEditing({ ...editing, query: e.target.value })} rows={2} className="query-input" />
             </div>
-            <div className="export-options-grid">
-              <div className="form-group">
+            <div className="form-grid">
+              <div className="field">
                 <label className="label">{t("cronLabel")}</label>
                 <select value={cronMode} onChange={(e) => { const v = e.target.value; setCronMode(v); if (v !== "custom") setEditing({ ...editing, cron: v }); }} className="input ds-select">
                   {CRON_PRESETS.map((p) => (
@@ -225,22 +225,22 @@ export default function SchedulesPage() {
                 {cronMode === "custom" && (
                   <input value={editing.cron} onChange={(e) => setEditing({ ...editing, cron: e.target.value })} placeholder="*/30 * * * *" className="input" style={{ marginTop: 6 }} />
                 )}
-                <div className="field-hint">{t("cronHint")}</div>
+                <div className="hint">{t("cronHint")}</div>
               </div>
-              <div className="form-group">
+              <div className="field">
                 <label className="label">{t("lookbackLabel")}</label>
                 <select value={editing.lookback_minutes} onChange={(e) => setEditing({ ...editing, lookback_minutes: Number(e.target.value) })} className="input ds-select">
                   {LOOKBACK_OPTIONS.map((o) => (
                     <option key={o.minutes} value={o.minutes}>{t(o.labelKey)}</option>
                   ))}
                 </select>
-                <label className="global-check" style={{ marginTop: 6 }}>
+                <label className="check" style={{ marginTop: 6 }}>
                   <input type="checkbox" checked={editing.align} onChange={(e) => setEditing({ ...editing, align: e.target.checked })} />
                   {t("alignLabel")}
                 </label>
-                <div className="field-hint">{t("alignHint")}</div>
+                <div className="hint">{t("alignHint")}</div>
               </div>
-              <div className="form-group">
+              <div className="field">
                 <label className="label">{t("formatSelectTitle")}</label>
                 <select value={editing.format} onChange={(e) => setEditing({ ...editing, format: e.target.value as ExportFormat })} className="input ds-select">
                   <option value="tar.gz">.tar.gz</option>
@@ -248,7 +248,7 @@ export default function SchedulesPage() {
                   <option value="log">{t("formatRaw")}</option>
                 </select>
               </div>
-              <div className="form-group">
+              <div className="field">
                 <label className="label">{t("contentLabel")}</label>
                 <select value={editing.content} onChange={(e) => setEditing({ ...editing, content: e.target.value as ExportContent })} className="input ds-select">
                   <option value="ndjson">{t("contentNdjson")}</option>
@@ -256,11 +256,11 @@ export default function SchedulesPage() {
                   <option value="csv">{t("contentCsv")}</option>
                 </select>
               </div>
-              <div className="form-group">
+              <div className="field">
                 <label className="label">{t("fieldsLabel")}</label>
                 <input value={fieldsText} onChange={(e) => setFieldsText(e.target.value)} placeholder={t("fieldsPlaceholder")} className="input" disabled={editing.content === "msg"} />
               </div>
-              <div className="form-group">
+              <div className="field">
                 <label className="label">{t("archiveSplitLabel")}</label>
                 <select value={editing.archive_split_mb} onChange={(e) => setEditing({ ...editing, archive_split_mb: Number(e.target.value) })} className="input ds-select" disabled={editing.format !== "tar.gz"}>
                   {ARCHIVE_SPLIT_OPTIONS.map((mb) => (
@@ -269,16 +269,16 @@ export default function SchedulesPage() {
                 </select>
               </div>
             </div>
-            <div className="export-checks">
-              <label className="global-check" title={canNotify ? "" : t("notifyNoTarget")}>
+            <div className="check-group" style={{ marginTop: 12 }}>
+              <label className="check" title={canNotify ? "" : t("notifyNoTarget")}>
                 <input type="checkbox" checked={editing.notify && canNotify} disabled={!canNotify} onChange={(e) => setEditing({ ...editing, notify: e.target.checked })} />
                 {t("notifyLabel")}
               </label>
-              <label className="global-check">
+              <label className="check">
                 <input type="checkbox" checked={editing.auto_share} onChange={(e) => setEditing({ ...editing, auto_share: e.target.checked })} />
                 {t("autoShareLabel")}
               </label>
-              <label className="global-check">
+              <label className="check">
                 <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} />
                 {t("enabledLabel")}
               </label>

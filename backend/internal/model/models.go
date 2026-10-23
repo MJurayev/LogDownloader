@@ -107,8 +107,11 @@ type SavedQuery struct {
 	Name         string `json:"name"`
 	Query        string `json:"query"`
 	DatasourceID string `json:"datasource_id,omitempty"`
-	Global       bool   `json:"global"`
-	OwnerID      string `json:"owner_id"`
+	// Folder — ixtiyoriy papka yo'li, ichma-ich `/` bilan ("VASP/billing").
+	// Papka alohida obyekt emas: ko'rinishi ichidagi querylarning Global/Owner'iga ergashadi.
+	Folder  string `json:"folder,omitempty"`
+	Global  bool   `json:"global"`
+	OwnerID string `json:"owner_id"`
 }
 
 type JobStatus string
